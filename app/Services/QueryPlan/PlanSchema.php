@@ -4,7 +4,12 @@ declare(strict_types=1);
 
 namespace App\Services\QueryPlan;
 
+use NiekNijland\RDW\Datasets\DatasetId;
 use NiekNijland\RDW\Fields\RegisteredVehicleField;
+use NiekNijland\RDW\Schema\CastType;
+use NiekNijland\RDW\Schema\DatasetSchema;
+use NiekNijland\RDW\Schema\FieldDescriptor;
+use NiekNijland\RDW\Schema\SchemaRegistry;
 use Prism\Prism\Schema\ArraySchema;
 use Prism\Prism\Schema\EnumSchema;
 use Prism\Prism\Schema\NumberSchema;
@@ -15,6 +20,8 @@ final class PlanSchema
 {
     public static function build(): ObjectSchema
     {
+        $datasetSchema = app(SchemaRegistry::class)->get(DatasetId::RegisteredVehicles);
+
         $fieldNames = array_map(static fn (RegisteredVehicleField $f): string => $f->name, RegisteredVehicleField::cases());
 
         $fieldEnum = new EnumSchema(
@@ -23,13 +30,17 @@ final class PlanSchema
             options: $fieldNames,
         );
 
+        // Future optimisation: split the value field into a polymorphic schema
+        // keyed on `field` so each field gets a discriminated enum of its known
+        // values. Prism doesn't expose a per-property discriminator today and
+        // the marginal win over a vocabulary-rich description is small.
         $whereItem = new ObjectSchema(
             name: 'where_clause',
             description: 'A single where predicate against the RegisteredVehicle dataset.',
             properties: [
                 $fieldEnum,
                 new EnumSchema('op', 'Comparison operator.', array_map(static fn (WhereOp $o): string => $o->value, WhereOp::cases())),
-                new StringSchema('value', 'Comparison value. For Dutch RDW data use UPPERCASE Dutch values: VOLKSWAGEN, TOYOTA, WIT, ZWART, ROOD, BLAUW, GRIJS, GROEN, GEEL, etc. Booleans as "true"/"false". Dates as YYYY-MM-DD.'),
+                new StringSchema('value', self::valueDescription($datasetSchema)),
             ],
             requiredFields: ['field', 'op', 'value'],
         );
@@ -74,5 +85,32 @@ final class PlanSchema
             ],
             requiredFields: ['where', 'select', 'groupBy', 'aggregates', 'orderBy', 'limit', 'display', 'explanation'],
         );
+    }
+
+    private static function valueDescription(DatasetSchema $schema): string
+    {
+        $lines = ['Comparison value. For Dutch RDW data use UPPERCASE Dutch values. Booleans as "true"/"false". Dates as YYYY-MM-DD.'];
+
+        foreach ($schema->fieldsWithVocabulary() as $field) {
+            $vocabulary = $field->vocabulary;
+            if ($vocabulary === null) {
+                continue;
+            }
+            $values = implode(', ', $vocabulary->values);
+            $lines[] = $vocabulary->exhaustive
+                ? sprintf('%s: one of %s', $field->enumCase, $values)
+                : sprintf('%s (examples — field is open): %s', $field->enumCase, $values);
+        }
+
+        $booleanFields = array_values(array_filter(
+            $schema->exposedFields(),
+            static fn (FieldDescriptor $f): bool => $f->cast === CastType::Boolean,
+        ));
+        if ($booleanFields !== []) {
+            $names = implode(', ', array_map(static fn (FieldDescriptor $f): string => $f->enumCase, $booleanFields));
+            $lines[] = sprintf('Boolean fields (%s): "true" or "false".', $names);
+        }
+
+        return implode(' ', $lines);
     }
 }

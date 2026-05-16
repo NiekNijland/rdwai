@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace Tests\Feature\Settings;
 
 use App\Models\User;
-use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Hash;
 use Inertia\Testing\AssertableInertia as Assert;
 use Laravel\Fortify\Features;
@@ -13,8 +12,6 @@ use Tests\TestCase;
 
 class SecurityTest extends TestCase
 {
-    use RefreshDatabase;
-
     public function test_security_page_is_displayed(): void
     {
         $this->skipUnlessFortifyHas(Features::twoFactorAuthentication());
