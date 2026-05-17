@@ -1,4 +1,4 @@
-import type { QueryRow } from './types';
+import type { Bucket, QueryRow } from './types';
 
 export function localeTag(locale: string): string {
     return locale === 'nl' ? 'nl-NL' : 'en-US';
@@ -91,6 +91,45 @@ export function isDateLike(value: unknown): boolean {
     }
 
     return /^\d{4}-\d{2}-\d{2}/.test(value);
+}
+
+// Format a group-by value using the bucket from the query plan, so date-truncated
+// columns render as "2011" / "Mar 2011" / "15 Mar 2011" instead of raw ISO strings.
+export function formatBucketLabel(
+    value: unknown,
+    bucket: Bucket,
+    locale: string,
+): string {
+    if (value === null || value === undefined) {
+        return '—';
+    }
+
+    if (bucket === 'none' || typeof value !== 'string' || !isDateLike(value)) {
+        return String(value);
+    }
+
+    if (bucket === 'year') {
+        return value.slice(0, 4);
+    }
+
+    const date = new Date(value);
+
+    if (Number.isNaN(date.getTime())) {
+        return value;
+    }
+
+    if (bucket === 'month') {
+        return date.toLocaleDateString(localeTag(locale), {
+            month: 'short',
+            year: 'numeric',
+        });
+    }
+
+    return date.toLocaleDateString(localeTag(locale), {
+        day: 'numeric',
+        month: 'short',
+        year: 'numeric',
+    });
 }
 
 // 5 chart slots in the design system. We cycle for groups with more categories.

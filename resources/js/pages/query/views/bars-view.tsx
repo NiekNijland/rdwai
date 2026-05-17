@@ -14,8 +14,8 @@ import {
 } from '@/components/ui/chart';
 import type { ChartConfig } from '@/components/ui/chart';
 
-import { findNumericKey, formatNumber } from '../format';
-import type { Plan, QueryRow } from '../types';
+import { findNumericKey, formatBucketLabel, formatNumber } from '../format';
+import type { Bucket, Plan, QueryRow } from '../types';
 
 export function BarsView({
     rows,
@@ -33,6 +33,7 @@ export function BarsView({
         plan.groupBy[0]?.field ??
         Object.keys(firstRow).find((k) => typeof firstRow[k] === 'string') ??
         Object.keys(firstRow)[0];
+    const bucket: Bucket = plan.groupBy[0]?.bucket ?? 'none';
     const valueKey = plan.aggregates[0]?.alias ?? findNumericKey(firstRow);
 
     if (groupKey === undefined || valueKey === undefined) {
@@ -41,7 +42,7 @@ export function BarsView({
 
     const data = rows
         .map((r) => ({
-            label: String(r[groupKey] ?? '—'),
+            label: formatBucketLabel(r[groupKey], bucket, locale),
             value: Number(r[valueKey] ?? 0),
         }))
         .filter((d) => Number.isFinite(d.value))
@@ -55,12 +56,20 @@ export function BarsView({
         },
     } satisfies ChartConfig;
 
+    // Single-bar charts stretch the bar to the full plot width, which pushes a
+    // `position="right"` label off the chart; render it inside the bar instead.
+    const labelPosition = data.length === 1 ? 'insideRight' : 'right';
+    const labelClass =
+        data.length === 1
+            ? 'fill-primary-foreground text-xs font-medium'
+            : 'fill-foreground text-xs';
+
     return (
         <ChartContainer config={config} className="h-[360px] w-full">
             <BarChart
                 data={data}
                 layout="vertical"
-                margin={{ left: 80, right: 32 }}
+                margin={{ left: 12, right: 48 }}
             >
                 <CartesianGrid horizontal={false} />
                 <XAxis type="number" hide />
@@ -79,8 +88,8 @@ export function BarsView({
                 <Bar dataKey="value" fill="var(--chart-1)" radius={4}>
                     <LabelList
                         dataKey="value"
-                        position="right"
-                        className="fill-foreground text-xs"
+                        position={labelPosition}
+                        className={labelClass}
                         formatter={(v) => formatNumber(v, locale)}
                     />
                 </Bar>
