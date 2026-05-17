@@ -27,6 +27,15 @@ Route::post('/api/query', [QueryController::class, 'run'])
     ->middleware('throttle:rdw-query')
     ->name('rdw.query.run');
 
+Route::get('/api/query/popular', [QueryController::class, 'popular'])
+    ->middleware('throttle:rdw-read')
+    ->name('rdw.query.popular');
+
+Route::post('/api/query/{slug}/feedback', [QueryController::class, 'feedback'])
+    ->where('slug', '[A-Za-z0-9]+')
+    ->middleware('throttle:rdw-feedback')
+    ->name('rdw.query.feedback');
+
 Route::post('locale', UpdateLocaleController::class)->name('locale.update');
 
 Route::middleware(['auth', 'verified'])->group(function (): void {

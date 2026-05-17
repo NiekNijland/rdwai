@@ -4,12 +4,18 @@ declare(strict_types=1);
 
 namespace App\Http\Controllers\Rdw;
 
+use App\Actions\Rdw\FindPopularQueries;
+use App\Actions\Rdw\PersistQueryRun;
 use App\Actions\Rdw\QueryExecutionException;
 use App\Actions\Rdw\RunNaturalLanguageQuery;
+use App\Enums\Locale;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Rdw\RunQueryRequest;
-use App\Services\QueryPlan\Plan;
+use App\Http\Requests\Rdw\SubmitFeedbackRequest;
+use App\Models\QueryRun;
+use App\Services\QueryPlan\PlanPresenter;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
 use Inertia\Inertia;
 use Inertia\Response as InertiaResponse;
@@ -20,23 +26,39 @@ use Throwable;
 
 final class QueryController extends Controller
 {
-    public function index(): InertiaResponse
+    public function index(Request $request): InertiaResponse
     {
-        return Inertia::render('query/index');
+        $sharedRun = null;
+        $slug = $request->query('q');
+
+        if (is_string($slug) && $slug !== '') {
+            $run = QueryRun::query()->where('slug', $slug)->first();
+
+            if ($run instanceof QueryRun) {
+                $sharedRun = $this->serializeRun($run);
+            }
+        }
+
+        return Inertia::render('query/index', [
+            'sharedRun' => $sharedRun,
+        ]);
     }
 
     public function run(
         RunQueryRequest $request,
         RunNaturalLanguageQuery $action,
+        PersistQueryRun $persist,
     ): JsonResponse {
+        $prompt = $request->string('prompt')->toString();
+
         try {
-            $result = $action->execute($request->string('prompt')->toString());
+            $result = $action->execute($prompt);
         } catch (RateLimitException $e) {
             return response()->json([
                 'error' => __('query.errors.rate_limited', ['seconds' => $e->retryAfterSeconds]),
             ], 429);
         } catch (QueryExecutionException $e) {
-            $serialisedPlan = $this->serializePlan($e->plan);
+            $serialisedPlan = PlanPresenter::toArray($e->plan);
             Log::warning('RDW query failed', [
                 'message' => $e->getMessage(),
                 'plan' => $serialisedPlan,
@@ -75,8 +97,20 @@ final class QueryController extends Controller
             ], 500);
         }
 
+        $user = $request->user();
+        $run = $persist->execute(
+            prompt: $prompt,
+            locale: app()->getLocale(),
+            plan: $result['plan'],
+            rows: $result['rows'],
+            soql: $result['soql'],
+            url: $result['url'],
+            userId: $user !== null ? (string) $user->getAuthIdentifier() : null,
+        );
+
         return response()->json([
-            'plan' => $this->serializePlan($result['plan']),
+            'slug' => $run->slug,
+            'plan' => PlanPresenter::toArray($result['plan']),
             'soql' => $result['soql'],
             'url' => $result['url'],
             'rows' => $result['rows'],
@@ -84,31 +118,59 @@ final class QueryController extends Controller
         ]);
     }
 
+    public function feedback(SubmitFeedbackRequest $request, string $slug): JsonResponse
+    {
+        $run = QueryRun::query()->where('slug', $slug)->first();
+
+        if (! $run instanceof QueryRun) {
+            return response()->json(['error' => __('query.errors.not_found')], 404);
+        }
+
+        $run->fill([
+            'rating' => $request->validated('rating'),
+            'comment' => $request->validated('comment'),
+            'rated_at' => now(),
+        ])->save();
+
+        return response()->json([
+            'rating' => $run->rating,
+            'comment' => $run->comment,
+        ]);
+    }
+
+    public function popular(Request $request, FindPopularQueries $finder): JsonResponse
+    {
+        return response()->json([
+            'prompts' => $finder->execute($this->resolveLocale($request)),
+        ]);
+    }
+
+    private function resolveLocale(Request $request): string
+    {
+        $candidate = $request->query('locale');
+        $allowed = array_map(static fn (Locale $l): string => $l->value, Locale::cases());
+
+        return is_string($candidate) && in_array($candidate, $allowed, true)
+            ? $candidate
+            : app()->getLocale();
+    }
+
     /**
      * @return array<string, mixed>
      */
-    private function serializePlan(Plan $plan): array
+    private function serializeRun(QueryRun $run): array
     {
         return [
-            'where' => array_map(static fn ($c): array => [
-                'field' => $c->field,
-                'op' => $c->op->value,
-                'value' => $c->value,
-            ], $plan->where),
-            'select' => $plan->select,
-            'groupBy' => $plan->groupBy,
-            'aggregates' => array_map(static fn ($a): array => [
-                'fn' => $a->fn->value,
-                'field' => $a->field,
-                'alias' => $a->alias,
-            ], $plan->aggregates),
-            'orderBy' => array_map(static fn ($o): array => [
-                'expr' => $o->expr,
-                'direction' => $o->direction->value,
-            ], $plan->orderBy),
-            'limit' => $plan->limit,
-            'display' => $plan->display->value,
-            'explanation' => $plan->explanation,
+            'slug' => $run->slug,
+            'prompt' => $run->prompt,
+            'locale' => $run->locale,
+            'plan' => $run->plan,
+            'soql' => $run->soql,
+            'url' => $run->url,
+            'rows' => $run->rows,
+            'displayHint' => $run->display_hint,
+            'rating' => $run->rating,
+            'comment' => $run->comment,
         ];
     }
 }

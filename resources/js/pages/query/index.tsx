@@ -1,6 +1,19 @@
 import { Head } from '@inertiajs/react';
-import { ChevronDown, Sparkles } from 'lucide-react';
-import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import {
+    ChevronDown,
+    Download,
+    Share2,
+    Sparkles,
+    ThumbsDown,
+    ThumbsUp,
+} from 'lucide-react';
+import {
+    useCallback,
+    useEffect,
+    useRef,
+    useState,
+    useSyncExternalStore,
+} from 'react';
 import {
     Bar,
     BarChart,
@@ -41,12 +54,15 @@ import {
     TableRow,
 } from '@/components/ui/table';
 import { Textarea } from '@/components/ui/textarea';
+import { useClipboard } from '@/hooks/use-clipboard';
 import { useTranslation } from '@/hooks/use-translation';
+import { downloadRows } from '@/lib/export-rows';
 
 type WhereClause = { field: string; op: string; value: string };
 type AggregateClause = { fn: string; field: string | null; alias: string };
 type OrderClause = { expr: string; direction: 'asc' | 'desc' };
 type DisplayHint = 'count' | 'bars' | 'table' | 'record';
+type Rating = 'up' | 'down';
 
 type Plan = {
     where: WhereClause[];
@@ -62,6 +78,32 @@ type Plan = {
 type QueryRow = Record<string, unknown>;
 
 type QueryResult = {
+    slug?: string;
+    prompt: string;
+    plan: Plan;
+    soql: Record<string, string>;
+    url: string;
+    rows: QueryRow[];
+    displayHint: DisplayHint;
+    rating: Rating | null;
+    comment: string | null;
+};
+
+type SharedRun = {
+    slug: string;
+    prompt: string;
+    locale: string;
+    plan: Plan;
+    soql: Record<string, string>;
+    url: string;
+    rows: QueryRow[];
+    displayHint: DisplayHint;
+    rating: Rating | null;
+    comment: string | null;
+};
+
+type RunResponse = {
+    slug: string;
     plan: Plan;
     soql: Record<string, string>;
     url: string;
@@ -84,19 +126,34 @@ type QueryError = {
     responseBody?: string | null;
 };
 
+type PageProps = { sharedRun: SharedRun | null };
+
 const MIN_PROMPT_LENGTH = 3;
 const RECENT_QUERIES_KEY = 'rdwai:recent-queries';
 const RECENT_QUERIES_MAX = 6;
 
-export default function QueryPage() {
+export default function QueryPage({ sharedRun }: PageProps) {
+    // Remount on shared-run change so internal state resets cleanly — Inertia
+    // keeps the same component instance across navigations otherwise.
+    return (
+        <QueryPageInner
+            key={sharedRun?.slug ?? 'fresh'}
+            sharedRun={sharedRun}
+        />
+    );
+}
+
+function QueryPageInner({ sharedRun }: PageProps) {
     const { t, currentLocale } = useTranslation();
-    const [prompt, setPrompt] = useState('');
+    const locale = currentLocale();
+
+    const [prompt, setPrompt] = useState(sharedRun?.prompt ?? '');
     const [loading, setLoading] = useState(false);
-    const [result, setResult] = useState<QueryResult | null>(null);
+    const [result, setResult] = useState<QueryResult | null>(
+        sharedRun ? sharedRunToResult(sharedRun) : null,
+    );
     const [error, setError] = useState<QueryError | null>(null);
-    // Recent queries live in localStorage. useSyncExternalStore returns the
-    // empty list as the SSR snapshot, then swaps to the localStorage value
-    // after hydration — so we never produce mismatched markup.
+    const [popular, setPopular] = useState<string[]>([]);
     const recent = useSyncExternalStore(
         subscribeToRecentQueries,
         readRecentQueries,
@@ -110,6 +167,32 @@ export default function QueryPage() {
         },
         [],
     );
+
+    useEffect(() => {
+        const controller = new AbortController();
+
+        fetch(`/api/query/popular?locale=${encodeURIComponent(locale)}`, {
+            signal: controller.signal,
+            headers: { Accept: 'application/json' },
+        })
+            .then((response) =>
+                response.ok ? response.json() : { prompts: [] },
+            )
+            .then((data: { prompts?: unknown }) => {
+                if (Array.isArray(data.prompts)) {
+                    setPopular(
+                        data.prompts.filter(
+                            (v): v is string => typeof v === 'string',
+                        ),
+                    );
+                }
+            })
+            .catch(() => {
+                // Popular suggestions are non-critical; fail silently.
+            });
+
+        return () => controller.abort();
+    }, [locale]);
 
     const fallbackErrorForStatus = (status: number): string => {
         if (status === 429) {
@@ -181,8 +264,15 @@ export default function QueryPage() {
                 return;
             }
 
-            setResult(data as QueryResult);
+            const runData = data as RunResponse;
+            setResult({
+                ...runData,
+                prompt: value,
+                rating: null,
+                comment: null,
+            });
             pushRecentQuery(value);
+            updateShareUrl(locale, runData.slug);
         } catch (e) {
             if (e instanceof DOMException && e.name === 'AbortError') {
                 return;
@@ -201,6 +291,21 @@ export default function QueryPage() {
             }
         }
     };
+
+    const updateRating = useCallback(
+        (next: { rating: Rating | null; comment: string | null }): void => {
+            setResult((current) =>
+                current === null
+                    ? current
+                    : {
+                          ...current,
+                          rating: next.rating,
+                          comment: next.comment,
+                      },
+            );
+        },
+        [],
+    );
 
     return (
         <>
@@ -260,53 +365,136 @@ export default function QueryPage() {
                         </CardContent>
                     </Card>
 
-                    {!result && !error && !loading && recent.length > 0 && (
-                        <div className="flex flex-col items-center gap-2">
-                            <div className="flex items-center gap-2">
-                                <span className="text-xs text-neutral-500">
-                                    {t('pages.query.recent')}
-                                </span>
-                                <button
-                                    type="button"
-                                    onClick={() => clearRecentQueries()}
-                                    className="text-xs text-neutral-500 underline-offset-2 hover:text-neutral-700 hover:underline dark:hover:text-neutral-300"
-                                >
-                                    {t('pages.query.clearRecent')}
-                                </button>
-                            </div>
-                            <div className="flex flex-wrap justify-center gap-2">
-                                {recent.map((q) => (
-                                    <button
-                                        key={q}
-                                        type="button"
-                                        onClick={() => {
-                                            setPrompt(q);
-                                            void submit(q);
-                                        }}
-                                        className="group"
-                                    >
-                                        <Badge
-                                            variant="outline"
-                                            className="cursor-pointer text-xs font-normal transition group-hover:bg-neutral-100 dark:group-hover:bg-neutral-800"
-                                        >
-                                            {q}
-                                        </Badge>
-                                    </button>
-                                ))}
-                            </div>
-                        </div>
+                    {!result && !error && !loading && (
+                        <SuggestionsList
+                            popular={popular}
+                            recent={recent}
+                            onPick={(q) => {
+                                setPrompt(q);
+                                void submit(q);
+                            }}
+                        />
                     )}
 
                     {loading && <LoadingSkeleton />}
 
                     {result && (
-                        <ResultView result={result} locale={currentLocale()} />
+                        <ResultView
+                            result={result}
+                            locale={locale}
+                            onRatingChange={updateRating}
+                        />
                     )}
 
                     {error && !loading && <ErrorView error={error} />}
                 </div>
             </div>
         </>
+    );
+}
+
+function sharedRunToResult(run: SharedRun): QueryResult {
+    return {
+        slug: run.slug,
+        prompt: run.prompt,
+        plan: run.plan,
+        soql: run.soql,
+        url: run.url,
+        rows: run.rows,
+        displayHint: run.displayHint,
+        rating: run.rating,
+        comment: run.comment,
+    };
+}
+
+function updateShareUrl(locale: string, slug: string): void {
+    if (typeof window === 'undefined') {
+        return;
+    }
+
+    window.history.replaceState({}, '', buildShareUrl(locale, slug));
+}
+
+function SuggestionsList({
+    popular,
+    recent,
+    onPick,
+}: {
+    popular: string[];
+    recent: string[];
+    onPick: (q: string) => void;
+}) {
+    const { t } = useTranslation();
+
+    if (popular.length === 0 && recent.length === 0) {
+        return null;
+    }
+
+    return (
+        <div className="flex flex-col gap-4">
+            {popular.length > 0 && (
+                <SuggestionRow
+                    label={t('pages.query.popular')}
+                    items={popular}
+                    onPick={onPick}
+                />
+            )}
+
+            {recent.length > 0 && (
+                <SuggestionRow
+                    label={t('pages.query.recent')}
+                    items={recent}
+                    onPick={onPick}
+                    trailing={
+                        <button
+                            type="button"
+                            onClick={() => clearRecentQueries()}
+                            className="text-xs text-neutral-500 underline-offset-2 hover:text-neutral-700 hover:underline dark:hover:text-neutral-300"
+                        >
+                            {t('pages.query.clearRecent')}
+                        </button>
+                    }
+                />
+            )}
+        </div>
+    );
+}
+
+function SuggestionRow({
+    label,
+    items,
+    onPick,
+    trailing,
+}: {
+    label: string;
+    items: string[];
+    onPick: (q: string) => void;
+    trailing?: React.ReactNode;
+}) {
+    return (
+        <div className="flex flex-col items-center gap-2">
+            <div className="flex items-center gap-2">
+                <span className="text-xs text-neutral-500">{label}</span>
+                {trailing}
+            </div>
+            <div className="flex flex-wrap justify-center gap-2">
+                {items.map((q) => (
+                    <button
+                        key={q}
+                        type="button"
+                        onClick={() => onPick(q)}
+                        className="group"
+                    >
+                        <Badge
+                            variant="outline"
+                            className="cursor-pointer text-xs font-normal transition group-hover:bg-neutral-100 dark:group-hover:bg-neutral-800"
+                        >
+                            {q}
+                        </Badge>
+                    </button>
+                ))}
+            </div>
+        </div>
     );
 }
 
@@ -425,9 +613,14 @@ function formatResponseBody(body: string): string {
 function ResultView({
     result,
     locale,
+    onRatingChange,
 }: {
     result: QueryResult;
     locale: string;
+    onRatingChange: (next: {
+        rating: Rating | null;
+        comment: string | null;
+    }) => void;
 }) {
     return (
         <div className="flex flex-col gap-4">
@@ -440,7 +633,217 @@ function ResultView({
                 </CardContent>
             </Card>
 
+            <ResultToolbar result={result} locale={locale} />
+
+            {result.slug !== undefined && (
+                <FeedbackPanel
+                    key={result.slug}
+                    slug={result.slug}
+                    rating={result.rating}
+                    comment={result.comment}
+                    onChange={onRatingChange}
+                />
+            )}
+
             <QueryDebugPanel soql={result.soql} url={result.url} />
+        </div>
+    );
+}
+
+function ResultToolbar({
+    result,
+    locale,
+}: {
+    result: QueryResult;
+    locale: string;
+}) {
+    const { t } = useTranslation();
+    const [, copy] = useClipboard();
+    const hasRows = result.rows.length > 0;
+    const shareUrl =
+        result.slug !== undefined ? buildShareUrl(locale, result.slug) : null;
+
+    return (
+        <div className="flex flex-wrap items-center justify-end gap-2">
+            {shareUrl && (
+                <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={async () => {
+                        const ok = await copy(shareUrl);
+
+                        if (ok) {
+                            toast.success(t('pages.query.shareCopied'));
+                        } else {
+                            toast.error(t('pages.query.shareFailed'));
+                        }
+                    }}
+                >
+                    <Share2 className="mr-1 h-3 w-3" />
+                    {t('pages.query.share')}
+                </Button>
+            )}
+
+            {hasRows && (
+                <>
+                    <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() =>
+                            downloadRows(result.rows, 'csv', result.prompt)
+                        }
+                    >
+                        <Download className="mr-1 h-3 w-3" />
+                        {t('pages.query.exportCsv')}
+                    </Button>
+                    <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() =>
+                            downloadRows(result.rows, 'json', result.prompt)
+                        }
+                    >
+                        <Download className="mr-1 h-3 w-3" />
+                        {t('pages.query.exportJson')}
+                    </Button>
+                </>
+            )}
+        </div>
+    );
+}
+
+function buildShareUrl(locale: string, slug: string): string {
+    if (typeof window === 'undefined') {
+        return `/${locale}?q=${encodeURIComponent(slug)}`;
+    }
+
+    const url = new URL(window.location.href);
+    url.pathname = `/${locale}`;
+    url.search = '';
+    url.searchParams.set('q', slug);
+
+    return url.toString();
+}
+
+function FeedbackPanel({
+    slug,
+    rating,
+    comment,
+    onChange,
+}: {
+    slug: string;
+    rating: Rating | null;
+    comment: string | null;
+    onChange: (next: { rating: Rating | null; comment: string | null }) => void;
+}) {
+    const { t } = useTranslation();
+    const [commentDraft, setCommentDraft] = useState(comment ?? '');
+    const [submitting, setSubmitting] = useState(false);
+
+    const submitFeedback = async (
+        nextRating: Rating,
+        nextComment: string | null,
+    ): Promise<void> => {
+        setSubmitting(true);
+
+        try {
+            const csrf = document.querySelector<HTMLMetaElement>(
+                'meta[name="csrf-token"]',
+            )?.content;
+            const response = await fetch(`/api/query/${slug}/feedback`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    Accept: 'application/json',
+                    ...(csrf ? { 'X-CSRF-TOKEN': csrf } : {}),
+                },
+                body: JSON.stringify({
+                    rating: nextRating,
+                    comment: nextComment,
+                }),
+            });
+
+            if (!response.ok) {
+                throw new Error('feedback failed');
+            }
+
+            onChange({ rating: nextRating, comment: nextComment });
+            toast.success(t('pages.query.feedbackThanks'));
+        } catch {
+            toast.error(t('pages.query.feedbackFailed'));
+        } finally {
+            setSubmitting(false);
+        }
+    };
+
+    return (
+        <div className="flex flex-col gap-2 rounded-md border border-neutral-200 bg-white p-3 text-xs dark:border-neutral-800 dark:bg-neutral-900">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="text-neutral-600 dark:text-neutral-400">
+                    {t('pages.query.feedbackPrompt')}
+                </span>
+                <div className="flex items-center gap-2">
+                    <Button
+                        type="button"
+                        variant={rating === 'up' ? 'default' : 'outline'}
+                        size="sm"
+                        disabled={submitting}
+                        onClick={() =>
+                            void submitFeedback('up', commentDraft || null)
+                        }
+                        aria-label={t('pages.query.feedbackHelpful')}
+                    >
+                        <ThumbsUp className="h-3 w-3" />
+                    </Button>
+                    <Button
+                        type="button"
+                        variant={rating === 'down' ? 'default' : 'outline'}
+                        size="sm"
+                        disabled={submitting}
+                        onClick={() =>
+                            void submitFeedback('down', commentDraft || null)
+                        }
+                        aria-label={t('pages.query.feedbackNotHelpful')}
+                    >
+                        <ThumbsDown className="h-3 w-3" />
+                    </Button>
+                </div>
+            </div>
+
+            {rating !== null && (
+                <div className="flex flex-col gap-2">
+                    <Textarea
+                        value={commentDraft}
+                        onChange={(e) => setCommentDraft(e.target.value)}
+                        placeholder={t(
+                            'pages.query.feedbackCommentPlaceholder',
+                        )}
+                        rows={2}
+                        className="resize-none text-xs"
+                    />
+                    <div className="flex justify-end">
+                        <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            disabled={
+                                submitting || commentDraft === (comment ?? '')
+                            }
+                            onClick={() =>
+                                void submitFeedback(
+                                    rating,
+                                    commentDraft || null,
+                                )
+                            }
+                        >
+                            {t('pages.query.feedbackSubmit')}
+                        </Button>
+                    </div>
+                </div>
+            )}
         </div>
     );
 }

@@ -9,6 +9,7 @@ return [
         'rejected' => 'The generated query was rejected. Try rephrasing your question.',
         'malformed' => 'The generated query was malformed. Try rephrasing your question.',
         'unexpected' => 'Something went wrong building or running the query.',
+        'not_found' => 'That query result was not found.',
     ],
 
 ];

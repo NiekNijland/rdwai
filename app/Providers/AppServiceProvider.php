@@ -49,6 +49,14 @@ class AppServiceProvider extends ServiceProvider
             Limit::perMinute((int) config('rdwai.rate_limit.per_minute'))->by((string) $request->ip()),
             Limit::perDay((int) config('rdwai.rate_limit.per_day_global'))->by('rdw-query:global'),
         ]);
+
+        RateLimiter::for('rdw-feedback', fn (Request $request): array => [
+            Limit::perMinute((int) config('rdwai.rate_limit.feedback_per_minute'))->by((string) $request->ip()),
+        ]);
+
+        RateLimiter::for('rdw-read', fn (Request $request): array => [
+            Limit::perMinute((int) config('rdwai.rate_limit.read_per_minute'))->by((string) $request->ip()),
+        ]);
     }
 
     /**
