@@ -149,6 +149,15 @@ Plan:
   limit: 1
   display: bars
 
+User: In what year were {$brandA} {$modelA}s most popular?
+Plan:
+  where: Brand eq {$brandA}, CommercialName contains {$modelA}
+  groupBy: FirstAdmissionDate (year)
+  aggregates: count(*) as n
+  orderBy: n desc
+  limit: 1
+  display: bars
+
 User: Give me an overview of {$brandA}: count, average empty mass and average catalog price.
 Plan:
   where: Brand eq {$brandA}
