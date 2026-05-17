@@ -80,6 +80,26 @@ cleanup()
 
 trap cleanup EXIT
 
+# ── Anchor cwd ───────────────────────────────────────────────────────
+# Every subsequent step (`composer install`, `npm ci`, `git`, the
+# shared-link block below) assumes cwd is the repository root. Re-anchor
+# here so the script behaves the same whether it is invoked as
+# `./scripts/deploy.sh`, `bash scripts/deploy.sh`, or via VitoDeploy's
+# job runner (which may use an arbitrary working directory).
+cd "$(cd "$(dirname "$0")/.." && pwd)"
+
+# ── Update working tree ──────────────────────────────────────────────
+# VitoDeploy for this site is configured for in-place updates rather
+# than per-release-clone, and its built-in git step has historically
+# been a no-op — every deploy reran composer/npm against the original
+# checkout, so commits pushed to main were never picked up. We pull
+# explicitly here so the deploy is self-healing regardless of how the
+# runner invokes us. Override the branch with `DEPLOY_BRANCH=...` if
+# you ever cut a staging line.
+DEPLOY_BRANCH="${DEPLOY_BRANCH:-main}"
+run_step "Fetch origin/${DEPLOY_BRANCH}" git fetch --prune origin "${DEPLOY_BRANCH}"
+run_step "Reset working tree to origin/${DEPLOY_BRANCH}" git reset --hard "origin/${DEPLOY_BRANCH}"
+
 # ── Shared resources (VitoDeploy zero-downtime) ──────────────────────
 # VitoDeploy clones each release into a fresh directory but does not
 # symlink shared resources (.env, storage) automatically. We detect
