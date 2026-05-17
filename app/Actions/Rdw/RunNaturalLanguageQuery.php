@@ -9,10 +9,8 @@ use App\Services\QueryPlan\PlanFactory;
 use App\Services\QueryPlan\PlanRunner;
 use App\Services\QueryPlan\PlanSchema;
 use App\Services\QueryPlan\PromptBuilder;
-use NiekNijland\RDW\Exceptions\RateLimitException;
 use Prism\Prism\Enums\Provider;
 use Prism\Prism\Facades\Prism;
-use Throwable;
 
 class RunNaturalLanguageQuery
 {
@@ -24,7 +22,7 @@ class RunNaturalLanguageQuery
     }
 
     /**
-     * @return array{plan: Plan, rows: list<array<string, mixed>>, soql: array<string, string>}
+     * @return array{plan: Plan, rows: list<array<string, mixed>>, soql: array<string, string>, url: string}
      */
     public function execute(string $userPrompt): array
     {
@@ -39,21 +37,13 @@ class RunNaturalLanguageQuery
         $raw = $response->structured;
         $plan = $this->planFactory->fromArray($raw);
 
-        try {
-            $result = $this->planRunner->run($plan);
-        } catch (RateLimitException $e) {
-            // Rate-limit responses carry retry-after metadata the controller
-            // surfaces verbatim; wrapping them would hide that signal behind
-            // a generic 422 envelope.
-            throw $e;
-        } catch (Throwable $e) {
-            throw new QueryExecutionException($plan, $e);
-        }
+        $result = $this->planRunner->run($plan);
 
         return [
             'plan' => $plan,
             'rows' => $result['rows'],
             'soql' => $result['soql'],
+            'url' => $result['url'],
         ];
     }
 }

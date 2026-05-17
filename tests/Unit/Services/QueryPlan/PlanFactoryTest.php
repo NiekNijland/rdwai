@@ -23,7 +23,7 @@ final class PlanFactoryTest extends TestCase
                 ['field' => 'Brand', 'op' => 'eq', 'value' => 'VOLKSWAGEN'],
                 ['field' => 'PrimaryColor', 'op' => 'contains', 'value' => 'wit'],
             ],
-            'select' => ['LicensePlate', 'CommercialName'],
+            'select' => [],
             'groupBy' => ['PrimaryColor'],
             'aggregates' => [
                 ['fn' => 'count', 'field' => '*', 'alias' => 'n'],
@@ -42,7 +42,7 @@ final class PlanFactoryTest extends TestCase
         self::assertSame('VOLKSWAGEN', $plan->where[0]->value);
         self::assertSame(WhereOp::Contains, $plan->where[1]->op);
 
-        self::assertSame(['LicensePlate', 'CommercialName'], $plan->select);
+        self::assertSame([], $plan->select);
         self::assertSame(['PrimaryColor'], $plan->groupBy);
 
         self::assertCount(1, $plan->aggregates);
@@ -57,6 +57,68 @@ final class PlanFactoryTest extends TestCase
         self::assertSame(25, $plan->limit);
         self::assertSame(DisplayHint::Bars, $plan->display);
         self::assertSame('Counts white VWs.', $plan->explanation);
+    }
+
+    public function test_drops_spurious_select_fields_for_count_display(): void
+    {
+        $factory = new PlanFactory();
+
+        $plan = $factory->fromArray([
+            'select' => ['LicensePlate'],
+            'aggregates' => [['fn' => 'count', 'field' => '*', 'alias' => 'n']],
+            'display' => 'count',
+        ]);
+
+        self::assertSame([], $plan->select);
+        self::assertSame([], $plan->groupBy);
+    }
+
+    public function test_promotes_select_into_group_by_when_aggregates_are_present(): void
+    {
+        $factory = new PlanFactory();
+
+        $plan = $factory->fromArray([
+            'select' => ['CommercialName'],
+            'groupBy' => [],
+            'aggregates' => [['fn' => 'count', 'field' => '*', 'alias' => 'n']],
+            'orderBy' => [['expr' => 'n', 'direction' => 'desc']],
+            'limit' => 1,
+            'display' => 'bars',
+        ]);
+
+        self::assertSame([], $plan->select);
+        self::assertSame(['CommercialName'], $plan->groupBy);
+    }
+
+    public function test_merges_select_into_existing_group_by_without_duplicates(): void
+    {
+        $factory = new PlanFactory();
+
+        $plan = $factory->fromArray([
+            'select' => ['PrimaryColor', 'CommercialName'],
+            'groupBy' => ['PrimaryColor'],
+            'aggregates' => [['fn' => 'count', 'field' => '*', 'alias' => 'n']],
+            'display' => 'bars',
+        ]);
+
+        self::assertSame([], $plan->select);
+        self::assertSame(['PrimaryColor', 'CommercialName'], $plan->groupBy);
+    }
+
+    public function test_preserves_select_when_no_aggregates_are_present(): void
+    {
+        $factory = new PlanFactory();
+
+        $plan = $factory->fromArray([
+            'select' => ['LicensePlate', 'CommercialName'],
+            'groupBy' => [],
+            'aggregates' => [],
+            'limit' => 10,
+            'display' => 'table',
+        ]);
+
+        self::assertSame(['LicensePlate', 'CommercialName'], $plan->select);
+        self::assertSame([], $plan->groupBy);
     }
 
     public function test_clamps_limit_to_the_supported_range(): void

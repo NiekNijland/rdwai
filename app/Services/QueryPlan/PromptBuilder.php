@@ -49,13 +49,31 @@ The dataset is in Dutch and stores values in UPPERCASE. Use these exact strings:
 # How to choose a display hint
 
 - "count" → a single number (e.g. "how many X are registered?"). Use one count aggregate, empty groupBy.
-- "bars" → a grouped breakdown (e.g. "X per Y", "colors of …"). Use exactly one groupBy + one count aggregate, sort the aggregate desc, limit 25.
+- "bars" → a grouped breakdown (e.g. "X per Y", "colors of …"), including "top N" / "most common" questions. Use exactly one groupBy + one count aggregate, sort the aggregate desc, limit 25 (or 1 for "most common").
 - "table" → a list of rows (e.g. "show me 10 …"). Use select with a few fields, no aggregates.
 - "record" → a single vehicle (e.g. a license-plate lookup).
+
+# Mixing fields with aggregates
+
+When the plan has any aggregate, every field you want to see in the output must go in `groupBy`. Never put a plain field in `select` alongside an aggregate — SoQL rejects it with "column not in group by". `select` is only for non-aggregated row queries.
 
 # Date handling
 
 Date fields end in *Date. Pass values as YYYY-MM-DD strings. For "in 2017" use two clauses: gte 2017-01-01 AND lt 2018-01-01. For "in February 2017" use gte 2017-02-01 AND lt 2017-03-01.
+
+# License plates
+
+The dataset stores license plates without separators (e.g. "1ZTZ08"), but users will write them with dashes ("1-ZTZ-08") or spaces ("1 ZTZ 08"). When emitting a LicensePlate clause, strip all non-alphanumeric characters and uppercase the result. Always use eq for a full license plate (it's a unique identifier).
+
+# Choosing between exact match and prefix/substring for text fields
+
+For Brand, CommercialName, and other free-text fields, pick the operator from the user's intent, not by default:
+
+- Use **eq** when the user names a specific, fully-qualified value — e.g. "Golf GTI", or any time they quote/spell out the exact model.
+- Use **startsWith** when the user names a model *family* and would expect variants to be included. Examples: "how many Volkswagen Ups" should match CommercialName values like "UP", "UP!", "UP CROSS"; "Golfs" should match "GOLF", "GOLF PLUS", "GOLF VARIANT". Encode the prefix in UPPERCASE.
+- Use **contains** when the user describes part of a name that might appear anywhere in the value, or when they're clearly searching loosely.
+
+Counting/breakdown questions ("how many Xs", "X per …") almost always mean the family — prefer startsWith over eq there unless the user is explicit.
 
 # Examples
 
@@ -81,6 +99,15 @@ Plan:
   orderBy: RegistrationDate desc
   limit: 10
   display: table
+
+User: What's the most common {$brandA} variant from 1995?
+Plan:
+  where: Brand eq {$brandA}, FirstAdmissionDate gte 1995-01-01, FirstAdmissionDate lt 1996-01-01
+  groupBy: CommercialName
+  aggregates: count(*) as n
+  orderBy: n desc
+  limit: 1
+  display: bars
 
 Always fill every plan field; use empty arrays for parts that don't apply. Always set limit. The explanation field must summarise the query in one sentence.
 PROMPT;

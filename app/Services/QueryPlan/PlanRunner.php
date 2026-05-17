@@ -4,15 +4,18 @@ declare(strict_types=1);
 
 namespace App\Services\QueryPlan;
 
+use App\Actions\Rdw\QueryExecutionException;
 use Carbon\CarbonImmutable;
 use InvalidArgumentException;
 use NiekNijland\RDW\Datasets\DatasetId;
+use NiekNijland\RDW\Exceptions\RateLimitException;
 use NiekNijland\RDW\Fields\RegisteredVehicleField;
 use NiekNijland\RDW\Query\QueryBuilder;
 use NiekNijland\RDW\Query\SortDirection;
 use NiekNijland\RDW\Rdw;
 use NiekNijland\RDW\Schema\CastType;
 use NiekNijland\RDW\Schema\DatasetSchema;
+use Throwable;
 
 /**
  * Translates a validated {@see Plan} into a typed RDW {@see QueryBuilder},
@@ -34,7 +37,7 @@ final readonly class PlanRunner
     }
 
     /**
-     * @return array{rows: list<array<string, mixed>>, soql: array<string, string>}
+     * @return array{rows: list<array<string, mixed>>, soql: array<string, string>, url: string}
      */
     public function run(Plan $plan): array
     {
@@ -50,9 +53,31 @@ final readonly class PlanRunner
         }
 
         $soql = $builder->toSoqlParams();
-        $rows = $this->execute($builder, $plan);
+        $url = $this->buildRequestUrl($soql);
 
-        return ['rows' => $rows, 'soql' => $soql];
+        try {
+            $rows = $this->execute($builder, $plan);
+        } catch (RateLimitException $e) {
+            // The controller treats RateLimitException specially (429 with a
+            // Retry-After). Pass it through; do not wrap.
+            throw $e;
+        } catch (Throwable $e) {
+            throw new QueryExecutionException($plan, $soql, $url, $e);
+        }
+
+        return ['rows' => $rows, 'soql' => $soql, 'url' => $url];
+    }
+
+    /**
+     * @param array<string, string> $soql
+     */
+    private function buildRequestUrl(array $soql): string
+    {
+        $base = rtrim($this->rdw->configuration()->baseUrl, '/');
+        $datasetId = DatasetId::RegisteredVehicles->value;
+        $query = http_build_query($soql, '', '&', PHP_QUERY_RFC3986);
+
+        return "{$base}/resource/{$datasetId}.json" . ($query !== '' ? "?{$query}" : '');
     }
 
     /**

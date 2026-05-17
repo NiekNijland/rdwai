@@ -20,16 +20,11 @@ use Tests\TestCase;
 
 final class QueryControllerTest extends TestCase
 {
-    public function test_index_renders_inertia_page_with_examples_from_config(): void
+    public function test_index_renders_inertia_query_page(): void
     {
-        config()->set('rdwai.examples', ['Example one', 'Example two']);
-
         $this->get(route('home'))
             ->assertOk()
-            ->assertInertia(fn (Assert $page) => $page
-                ->component('query/index')
-                ->where('examples', ['Example one', 'Example two']),
-            );
+            ->assertInertia(fn (Assert $page) => $page->component('query/index'));
     }
 
     public function test_run_returns_plan_rows_and_soql_for_a_well_formed_response(): void
@@ -76,7 +71,7 @@ final class QueryControllerTest extends TestCase
             ->assertJsonValidationErrors('prompt');
     }
 
-    public function test_run_returns_422_when_llm_emits_an_unknown_field(): void
+    public function test_run_returns_422_with_malformed_message_when_plan_validation_fails(): void
     {
         $this->fakePrismWithPlan([
             'where' => [['field' => 'NotAField', 'op' => 'eq', 'value' => 'x']],
@@ -95,7 +90,7 @@ final class QueryControllerTest extends TestCase
             ->assertJsonPath('error', 'The generated query was malformed. Try rephrasing your question.');
     }
 
-    public function test_run_returns_422_when_rdw_rejects_the_query(): void
+    public function test_run_returns_422_with_rejected_message_and_debug_payload_when_rdw_rejects_the_query(): void
     {
         $this->fakePrismWithPlan([
             'where' => [['field' => 'Brand', 'op' => 'eq', 'value' => 'VOLKSWAGEN']],
@@ -113,8 +108,10 @@ final class QueryControllerTest extends TestCase
         $response = $this->postJson(route('rdw.query.run'), ['prompt' => 'test prompt']);
 
         $response->assertStatus(422)
-            ->assertJsonPath('error', 'The generated query was rejected by RDW. Try rephrasing your question.')
-            ->assertJsonStructure(['plan']);
+            ->assertJsonPath('error', 'The generated query was rejected. Try rephrasing your question.')
+            ->assertJsonPath('responseBody', 'malformed where clause')
+            ->assertJsonPath('plan.where.0.field', 'Brand')
+            ->assertJsonStructure(['plan', 'soql', 'url', 'responseBody']);
     }
 
     public function test_run_returns_429_when_rdw_rate_limits(): void

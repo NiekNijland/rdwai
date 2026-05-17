@@ -22,59 +22,63 @@ final class QueryController extends Controller
 {
     public function index(): InertiaResponse
     {
-        /** @var list<string> $examples */
-        $examples = (array) config('rdwai.examples', []);
-
-        return Inertia::render('query/index', [
-            'examples' => $examples,
-        ]);
+        return Inertia::render('query/index');
     }
 
-    public function run(RunQueryRequest $request, RunNaturalLanguageQuery $action): JsonResponse
-    {
+    public function run(
+        RunQueryRequest $request,
+        RunNaturalLanguageQuery $action,
+    ): JsonResponse {
         try {
             $result = $action->execute($request->string('prompt')->toString());
         } catch (RateLimitException $e) {
             return response()->json([
-                'error' => 'RDW rate limit reached. Try again in ' . $e->retryAfterSeconds . 's.',
+                'error' => __('query.errors.rate_limited', ['seconds' => $e->retryAfterSeconds]),
             ], 429);
         } catch (QueryExecutionException $e) {
             $serialisedPlan = $this->serializePlan($e->plan);
             Log::warning('RDW query failed', [
                 'message' => $e->getMessage(),
                 'plan' => $serialisedPlan,
+                'soql' => $e->soql,
+                'url' => $e->url,
+                'responseBody' => $e->responseBody,
             ]);
 
             return response()->json([
-                'error' => 'The generated query was rejected by RDW. Try rephrasing your question.',
+                'error' => __('query.errors.rejected'),
                 'plan' => $serialisedPlan,
+                'soql' => $e->soql,
+                'url' => $e->url,
+                'responseBody' => $e->responseBody,
             ], 422);
         } catch (InvalidArgumentException $e) {
             // Field-name / alias / enum validation failures from PlanFactory or
-            // PlanRunner. The messages reference internal field names; safe but
-            // noisy, so return them under a generic envelope.
+            // PlanRunner. The message references internal field names, so we
+            // return the localized fallback to the user.
             Log::info('RDW plan invalid', ['message' => $e->getMessage()]);
 
             return response()->json([
-                'error' => 'The generated query was malformed. Try rephrasing your question.',
+                'error' => __('query.errors.malformed'),
             ], 422);
         } catch (RdwException $e) {
             Log::warning('RDW package error', ['message' => $e->getMessage()]);
 
             return response()->json([
-                'error' => 'The RDW open-data service rejected the query.',
+                'error' => __('query.errors.rejected'),
             ], 422);
         } catch (Throwable $e) {
             report($e);
 
             return response()->json([
-                'error' => 'Something went wrong building or running the query.',
+                'error' => __('query.errors.unexpected'),
             ], 500);
         }
 
         return response()->json([
             'plan' => $this->serializePlan($result['plan']),
             'soql' => $result['soql'],
+            'url' => $result['url'],
             'rows' => $result['rows'],
             'displayHint' => $result['plan']->display->value,
         ]);

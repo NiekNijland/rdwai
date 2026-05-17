@@ -6,6 +6,7 @@ namespace Tests;
 
 use Illuminate\Foundation\Testing\TestCase as BaseTestCase;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\URL;
 use Laravel\Fortify\Features;
 use MongoDB\Laravel\Connection;
 use Override;
@@ -21,6 +22,7 @@ abstract class TestCase extends BaseTestCase
     {
         parent::setUp();
 
+        URL::defaults(['locale' => app()->getLocale()]);
         $this->dropAllMongoCollections();
     }
 

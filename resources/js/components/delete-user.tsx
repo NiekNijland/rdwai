@@ -15,22 +15,26 @@ import {
     DialogTrigger,
 } from '@/components/ui/dialog';
 import { Label } from '@/components/ui/label';
+import { useTranslation } from '@/hooks/use-translation';
 
 export default function DeleteUser() {
     const passwordInput = useRef<HTMLInputElement>(null);
+    const { t } = useTranslation();
 
     return (
         <div className="space-y-6">
             <Heading
                 variant="small"
-                title="Delete account"
-                description="Delete your account and all of its resources"
+                title={t('components.deleteUser.heading')}
+                description={t('components.deleteUser.description')}
             />
             <div className="space-y-4 rounded-lg border border-red-100 bg-red-50 p-4 dark:border-red-200/10 dark:bg-red-700/10">
                 <div className="relative space-y-0.5 text-red-600 dark:text-red-100">
-                    <p className="font-medium">Warning</p>
+                    <p className="font-medium">
+                        {t('components.deleteUser.warning')}
+                    </p>
                     <p className="text-sm">
-                        Please proceed with caution, this cannot be undone.
+                        {t('components.deleteUser.warningDescription')}
                     </p>
                 </div>
 
@@ -40,18 +44,15 @@ export default function DeleteUser() {
                             variant="destructive"
                             data-test="delete-user-button"
                         >
-                            Delete account
+                            {t('components.deleteUser.button')}
                         </Button>
                     </DialogTrigger>
                     <DialogContent>
                         <DialogTitle>
-                            Are you sure you want to delete your account?
+                            {t('components.deleteUser.confirmTitle')}
                         </DialogTitle>
                         <DialogDescription>
-                            Once your account is deleted, all of its resources
-                            and data will also be permanently deleted. Please
-                            enter your password to confirm you would like to
-                            permanently delete your account.
+                            {t('components.deleteUser.confirmDescription')}
                         </DialogDescription>
 
                         <Form
@@ -70,14 +71,18 @@ export default function DeleteUser() {
                                             htmlFor="password"
                                             className="sr-only"
                                         >
-                                            Password
+                                            {t(
+                                                'components.deleteUser.passwordLabel',
+                                            )}
                                         </Label>
 
                                         <PasswordInput
                                             id="password"
                                             name="password"
                                             ref={passwordInput}
-                                            placeholder="Password"
+                                            placeholder={t(
+                                                'components.deleteUser.passwordPlaceholder',
+                                            )}
                                             autoComplete="current-password"
                                         />
 
@@ -92,7 +97,9 @@ export default function DeleteUser() {
                                                     resetAndClearErrors()
                                                 }
                                             >
-                                                Cancel
+                                                {t(
+                                                    'components.deleteUser.cancel',
+                                                )}
                                             </Button>
                                         </DialogClose>
 
@@ -105,7 +112,9 @@ export default function DeleteUser() {
                                                 type="submit"
                                                 data-test="confirm-delete-user-button"
                                             >
-                                                Delete account
+                                                {t(
+                                                    'components.deleteUser.confirm',
+                                                )}
                                             </button>
                                         </Button>
                                     </DialogFooter>

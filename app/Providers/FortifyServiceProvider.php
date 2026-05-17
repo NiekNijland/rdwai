@@ -7,11 +7,13 @@ namespace App\Providers;
 use App\Actions\Fortify\CreateNewUser;
 use App\Actions\Fortify\ResetUserPassword;
 use Illuminate\Cache\RateLimiting\Limit;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\ServiceProvider;
 use Illuminate\Support\Str;
 use Inertia\Inertia;
+use Laravel\Fortify\Contracts\LogoutResponse;
 use Laravel\Fortify\Features;
 use Laravel\Fortify\Fortify;
 
@@ -22,7 +24,18 @@ class FortifyServiceProvider extends ServiceProvider
      */
     public function register(): void
     {
-        //
+        // Localize Fortify's post-logout redirect so users land on /{locale}
+        // (set via URL::defaults by SetLocale) instead of '/' which would
+        // immediately redirect again.
+        $this->app->singleton(LogoutResponse::class, fn (): LogoutResponse => new class() implements LogoutResponse
+        {
+            public function toResponse($request)
+            {
+                return $request->wantsJson()
+                    ? new JsonResponse('', 204)
+                    : redirect()->route('home');
+            }
+        });
     }
 
     /**

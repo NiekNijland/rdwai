@@ -7,6 +7,8 @@ namespace App\Services\QueryPlan;
 use BackedEnum;
 use InvalidArgumentException;
 use NiekNijland\RDW\Fields\RegisteredVehicleField;
+use Psr\Log\LoggerInterface;
+use Psr\Log\NullLogger;
 
 /**
  * Builds a typed {@see Plan} from the loose array Prism hands back.
@@ -14,7 +16,7 @@ use NiekNijland\RDW\Fields\RegisteredVehicleField;
  * Prism + OpenAI strict schema validates the shape, but we still re-validate
  * enum values and resolve PascalCase field names to {@see RegisteredVehicleField}
  * cases so the runner can rely on typed inputs. All enum lookups are done with
- * {@see \BackedEnum::tryFrom()} so an out-of-band value surfaces as a typed
+ * {@see BackedEnum::tryFrom()} so an out-of-band value surfaces as a typed
  * {@see InvalidArgumentException} (mapped to 422 by the controller) instead of
  * a raw {@see \ValueError} (which would surface as a 500).
  */
@@ -26,21 +28,78 @@ final class PlanFactory
 
     private const string ALIAS_PATTERN = '/^[A-Za-z_][A-Za-z0-9_]*$/';
 
+    private readonly LoggerInterface $logger;
+
+    public function __construct(?LoggerInterface $logger = null)
+    {
+        $this->logger = $logger ?? new NullLogger();
+    }
+
     /**
      * @param array<string, mixed> $data
      */
     public function fromArray(array $data): Plan
     {
+        $select = $this->parseFieldList(array_values($this->arrayOrEmpty($data, 'select')));
+        $groupBy = $this->parseFieldList(array_values($this->arrayOrEmpty($data, 'groupBy')));
+        $aggregates = array_values(array_map($this->parseAggregate(...), $this->arrayOrEmpty($data, 'aggregates')));
+        $display = $this->parseDisplay($data['display'] ?? null);
+
+        [$select, $groupBy] = $this->normaliseSelectAndGroupBy($select, $groupBy, $aggregates, $display);
+
         return new Plan(
             where: array_values(array_map($this->parseWhere(...), $this->arrayOrEmpty($data, 'where'))),
-            select: $this->parseFieldList(array_values($this->arrayOrEmpty($data, 'select'))),
-            groupBy: $this->parseFieldList(array_values($this->arrayOrEmpty($data, 'groupBy'))),
-            aggregates: array_values(array_map($this->parseAggregate(...), $this->arrayOrEmpty($data, 'aggregates'))),
+            select: $select,
+            groupBy: $groupBy,
+            aggregates: $aggregates,
             orderBy: array_values(array_map($this->parseOrder(...), $this->arrayOrEmpty($data, 'orderBy'))),
             limit: isset($data['limit']) ? max(self::LIMIT_MIN, min(self::LIMIT_MAX, (int) $data['limit'])) : null,
-            display: $this->parseDisplay($data['display'] ?? null),
+            display: $display,
             explanation: (string) ($data['explanation'] ?? ''),
         );
+    }
+
+    /**
+     * SoQL rejects a SELECT that mixes a bare column with an aggregate unless
+     * the column is in GROUP BY. The LLM regularly violates this, in two
+     * shapes: (a) decorative select fields next to a count, (b) the field the
+     * user wants to group on placed in `select` instead of `groupBy`. We
+     * repair both deterministically so the resulting plan is always valid:
+     *
+     *  - For "count" display, drop spurious select fields entirely.
+     *  - Otherwise, promote select fields into groupBy and clear select.
+     *
+     * `PlanRunner` always re-adds groupBy fields to the SoQL `$select`, so
+     * promoted fields still appear in the projection.
+     *
+     * @param list<string> $select
+     * @param list<string> $groupBy
+     * @param list<AggregateClause> $aggregates
+     * @return array{0: list<string>, 1: list<string>}
+     */
+    private function normaliseSelectAndGroupBy(array $select, array $groupBy, array $aggregates, DisplayHint $display): array
+    {
+        if ($aggregates === [] || $select === []) {
+            return [$select, $groupBy];
+        }
+
+        if ($display === DisplayHint::Count) {
+            $this->logger->debug('PlanFactory dropped select fields for count display', [
+                'select' => $select,
+            ]);
+
+            return [[], $groupBy];
+        }
+
+        $merged = array_values(array_unique([...$groupBy, ...$select]));
+
+        $this->logger->debug('PlanFactory promoted select into groupBy', [
+            'originalSelect' => $select,
+            'originalGroupBy' => $groupBy,
+            'mergedGroupBy' => $merged,
+        ]);
+
+        return [[], $merged];
     }
 
     /**

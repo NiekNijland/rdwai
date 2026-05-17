@@ -1,6 +1,6 @@
 import { Head } from '@inertiajs/react';
 import { ChevronDown, Sparkles } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import {
     Bar,
     BarChart,
@@ -11,6 +11,7 @@ import {
 } from 'recharts';
 import { toast } from 'sonner';
 
+import { LanguageSwitcher } from '@/components/language-switcher';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -40,6 +41,7 @@ import {
     TableRow,
 } from '@/components/ui/table';
 import { Textarea } from '@/components/ui/textarea';
+import { useTranslation } from '@/hooks/use-translation';
 
 type WhereClause = { field: string; op: string; value: string };
 type AggregateClause = { fn: string; field: string | null; alias: string };
@@ -62,24 +64,44 @@ type QueryRow = Record<string, unknown>;
 type QueryResult = {
     plan: Plan;
     soql: Record<string, string>;
+    url: string;
     rows: QueryRow[];
     displayHint: DisplayHint;
 };
 
 type ErrorResponse = {
     error?: string;
+    plan?: Plan;
+    soql?: Record<string, string>;
+    url?: string;
+    responseBody?: string | null;
 };
 
-type Props = {
-    examples: string[];
+type QueryError = {
+    message: string;
+    soql?: Record<string, string>;
+    url?: string;
+    responseBody?: string | null;
 };
 
 const MIN_PROMPT_LENGTH = 3;
+const RECENT_QUERIES_KEY = 'rdwai:recent-queries';
+const RECENT_QUERIES_MAX = 6;
 
-export default function QueryPage({ examples }: Props) {
+export default function QueryPage() {
+    const { t, currentLocale } = useTranslation();
     const [prompt, setPrompt] = useState('');
     const [loading, setLoading] = useState(false);
     const [result, setResult] = useState<QueryResult | null>(null);
+    const [error, setError] = useState<QueryError | null>(null);
+    // Recent queries live in localStorage. useSyncExternalStore returns the
+    // empty list as the SSR snapshot, then swaps to the localStorage value
+    // after hydration — so we never produce mismatched markup.
+    const recent = useSyncExternalStore(
+        subscribeToRecentQueries,
+        readRecentQueries,
+        getRecentQueriesServerSnapshot,
+    );
     const abortRef = useRef<AbortController | null>(null);
 
     useEffect(
@@ -88,6 +110,26 @@ export default function QueryPage({ examples }: Props) {
         },
         [],
     );
+
+    const fallbackErrorForStatus = (status: number): string => {
+        if (status === 429) {
+            return t('pages.query.errors.rateLimited');
+        }
+
+        if (status === 422) {
+            return t('pages.query.errors.rejected');
+        }
+
+        if (status === 419) {
+            return t('pages.query.errors.sessionExpired');
+        }
+
+        if (status >= 500) {
+            return t('pages.query.errors.server');
+        }
+
+        return t('pages.query.errors.failed');
+    };
 
     const submit = async (overridePrompt?: string) => {
         const value = (overridePrompt ?? prompt).trim();
@@ -102,6 +144,7 @@ export default function QueryPage({ examples }: Props) {
 
         setLoading(true);
         setResult(null);
+        setError(null);
 
         try {
             const csrf = document.querySelector<HTMLMetaElement>(
@@ -121,23 +164,36 @@ export default function QueryPage({ examples }: Props) {
             const data = await parseJson(response);
 
             if (!response.ok) {
+                const errorData =
+                    data && typeof data === 'object'
+                        ? (data as ErrorResponse)
+                        : {};
                 const errorMessage =
-                    data && typeof data === 'object' && 'error' in data
-                        ? ((data as ErrorResponse).error ??
-                          fallbackErrorForStatus(response.status))
-                        : fallbackErrorForStatus(response.status);
+                    errorData.error ?? fallbackErrorForStatus(response.status);
                 toast.error(errorMessage);
+                setError({
+                    message: errorMessage,
+                    soql: errorData.soql,
+                    url: errorData.url,
+                    responseBody: errorData.responseBody,
+                });
 
                 return;
             }
 
             setResult(data as QueryResult);
+            pushRecentQuery(value);
         } catch (e) {
             if (e instanceof DOMException && e.name === 'AbortError') {
                 return;
             }
 
-            toast.error(e instanceof Error ? e.message : 'Network error');
+            const message =
+                e instanceof Error
+                    ? e.message
+                    : t('pages.query.errors.network');
+            toast.error(message);
+            setError({ message });
         } finally {
             if (abortRef.current === controller) {
                 abortRef.current = null;
@@ -148,20 +204,22 @@ export default function QueryPage({ examples }: Props) {
 
     return (
         <>
-            <Head title="RDWAI — Ask the Dutch vehicle registry" />
+            <Head title={t('pages.query.title')} />
             <div className="min-h-screen bg-gradient-to-b from-neutral-50 to-neutral-100 px-4 py-12 dark:from-neutral-950 dark:to-neutral-900">
+                <div className="absolute top-4 right-4">
+                    <LanguageSwitcher />
+                </div>
                 <div className="mx-auto flex max-w-3xl flex-col gap-6">
                     <header className="text-center">
                         <div className="mb-3 inline-flex items-center gap-2 rounded-full border border-neutral-200 bg-white/70 px-3 py-1 text-xs text-neutral-600 backdrop-blur dark:border-neutral-800 dark:bg-neutral-900/70 dark:text-neutral-400">
                             <Sparkles className="h-3 w-3" />
-                            Powered by gpt-4.1-nano + RDW Open Data
+                            {t('pages.query.poweredBy')}
                         </div>
                         <h1 className="text-3xl font-semibold tracking-tight sm:text-4xl">
-                            Ask the Dutch vehicle registry
+                            {t('pages.query.heading')}
                         </h1>
                         <p className="mt-2 text-sm text-neutral-600 dark:text-neutral-400">
-                            Describe what you want to know about registered
-                            vehicles in the Netherlands.
+                            {t('pages.query.description')}
                         </p>
                     </header>
 
@@ -179,13 +237,13 @@ export default function QueryPage({ examples }: Props) {
                                         void submit();
                                     }
                                 }}
-                                placeholder="e.g. How many white Volkswagen Ups from February 2017 are insured?"
+                                placeholder={t('pages.query.placeholder')}
                                 rows={3}
                                 className="resize-none text-base"
                             />
                             <div className="flex flex-wrap items-center justify-between gap-2">
                                 <span className="text-xs text-neutral-500">
-                                    ⌘ + Enter to submit
+                                    {t('pages.query.submitHint')}
                                 </span>
                                 <Button
                                     onClick={() => void submit()}
@@ -194,38 +252,58 @@ export default function QueryPage({ examples }: Props) {
                                         prompt.trim().length < MIN_PROMPT_LENGTH
                                     }
                                 >
-                                    {loading ? 'Thinking…' : 'Ask'}
+                                    {loading
+                                        ? t('pages.query.thinking')
+                                        : t('pages.query.ask')}
                                 </Button>
                             </div>
                         </CardContent>
                     </Card>
 
-                    {!result && !loading && (
-                        <div className="flex flex-wrap justify-center gap-2">
-                            {examples.map((ex) => (
+                    {!result && !error && !loading && recent.length > 0 && (
+                        <div className="flex flex-col items-center gap-2">
+                            <div className="flex items-center gap-2">
+                                <span className="text-xs text-neutral-500">
+                                    {t('pages.query.recent')}
+                                </span>
                                 <button
-                                    key={ex}
                                     type="button"
-                                    onClick={() => {
-                                        setPrompt(ex);
-                                        void submit(ex);
-                                    }}
-                                    className="group"
+                                    onClick={() => clearRecentQueries()}
+                                    className="text-xs text-neutral-500 underline-offset-2 hover:text-neutral-700 hover:underline dark:hover:text-neutral-300"
                                 >
-                                    <Badge
-                                        variant="outline"
-                                        className="cursor-pointer text-xs font-normal transition group-hover:bg-neutral-100 dark:group-hover:bg-neutral-800"
-                                    >
-                                        {ex}
-                                    </Badge>
+                                    {t('pages.query.clearRecent')}
                                 </button>
-                            ))}
+                            </div>
+                            <div className="flex flex-wrap justify-center gap-2">
+                                {recent.map((q) => (
+                                    <button
+                                        key={q}
+                                        type="button"
+                                        onClick={() => {
+                                            setPrompt(q);
+                                            void submit(q);
+                                        }}
+                                        className="group"
+                                    >
+                                        <Badge
+                                            variant="outline"
+                                            className="cursor-pointer text-xs font-normal transition group-hover:bg-neutral-100 dark:group-hover:bg-neutral-800"
+                                        >
+                                            {q}
+                                        </Badge>
+                                    </button>
+                                ))}
+                            </div>
                         </div>
                     )}
 
                     {loading && <LoadingSkeleton />}
 
-                    {result && <ResultView result={result} />}
+                    {result && (
+                        <ResultView result={result} locale={currentLocale()} />
+                    )}
+
+                    {error && !loading && <ErrorView error={error} />}
                 </div>
             </div>
         </>
@@ -244,7 +322,113 @@ function LoadingSkeleton() {
     );
 }
 
-function ResultView({ result }: { result: QueryResult }) {
+function ErrorView({ error }: { error: QueryError }) {
+    return (
+        <div className="flex flex-col gap-4">
+            <Card className="border-red-200 dark:border-red-900/50">
+                <CardHeader>
+                    <CardDescription className="text-red-700 dark:text-red-400">
+                        {error.message}
+                    </CardDescription>
+                </CardHeader>
+            </Card>
+
+            <QueryDebugPanel
+                soql={error.soql}
+                url={error.url}
+                responseBody={error.responseBody}
+                defaultOpen
+            />
+        </div>
+    );
+}
+
+function QueryDebugPanel({
+    soql,
+    url,
+    responseBody,
+    defaultOpen = false,
+}: {
+    soql?: Record<string, string>;
+    url?: string;
+    responseBody?: string | null;
+    defaultOpen?: boolean;
+}) {
+    const { t } = useTranslation();
+    const hasResponseBody = responseBody !== undefined && responseBody !== null;
+
+    if (soql === undefined && url === undefined && !hasResponseBody) {
+        return null;
+    }
+
+    return (
+        <Collapsible defaultOpen={defaultOpen}>
+            <CollapsibleTrigger className="flex w-full items-center justify-between rounded-md border border-neutral-200 bg-white px-3 py-2 text-xs text-neutral-600 hover:bg-neutral-50 dark:border-neutral-800 dark:bg-neutral-900 dark:text-neutral-400 dark:hover:bg-neutral-800">
+                <span>{t('pages.query.showQuery')}</span>
+                <ChevronDown className="h-3 w-3" />
+            </CollapsibleTrigger>
+            <CollapsibleContent className="mt-2 space-y-3 rounded-md border border-neutral-200 bg-white p-3 text-xs dark:border-neutral-800 dark:bg-neutral-900">
+                {soql && (
+                    <div>
+                        <div className="mb-2 font-semibold text-neutral-700 dark:text-neutral-300">
+                            {t('pages.query.soql')}
+                        </div>
+                        <pre className="overflow-x-auto rounded bg-neutral-50 p-2 text-[11px] leading-relaxed dark:bg-neutral-950">
+                            {JSON.stringify(soql, null, 2)}
+                        </pre>
+                    </div>
+                )}
+                {url && <RequestUrl url={url} />}
+                {hasResponseBody && (
+                    <div>
+                        <div className="mb-2 font-semibold text-neutral-700 dark:text-neutral-300">
+                            {t('pages.query.rdwResponse')}
+                        </div>
+                        <pre className="overflow-x-auto rounded bg-neutral-50 p-2 text-[11px] leading-relaxed whitespace-pre-wrap dark:bg-neutral-950">
+                            {formatResponseBody(responseBody)}
+                        </pre>
+                    </div>
+                )}
+            </CollapsibleContent>
+        </Collapsible>
+    );
+}
+
+function RequestUrl({ url }: { url: string }) {
+    const { t } = useTranslation();
+
+    return (
+        <div>
+            <div className="mb-2 font-semibold text-neutral-700 dark:text-neutral-300">
+                {t('pages.query.url')}
+            </div>
+            <a
+                href={url}
+                target="_blank"
+                rel="noreferrer"
+                className="block overflow-x-auto rounded bg-neutral-50 p-2 text-[11px] leading-relaxed break-all text-blue-600 hover:underline dark:bg-neutral-950 dark:text-blue-400"
+            >
+                {url}
+            </a>
+        </div>
+    );
+}
+
+function formatResponseBody(body: string): string {
+    try {
+        return JSON.stringify(JSON.parse(body), null, 2);
+    } catch {
+        return body;
+    }
+}
+
+function ResultView({
+    result,
+    locale,
+}: {
+    result: QueryResult;
+    locale: string;
+}) {
     return (
         <div className="flex flex-col gap-4">
             <Card>
@@ -252,41 +436,29 @@ function ResultView({ result }: { result: QueryResult }) {
                     <CardDescription>{result.plan.explanation}</CardDescription>
                 </CardHeader>
                 <CardContent>
-                    <ResultBody result={result} />
+                    <ResultBody result={result} locale={locale} />
                 </CardContent>
             </Card>
 
-            <Collapsible>
-                <CollapsibleTrigger className="flex w-full items-center justify-between rounded-md border border-neutral-200 bg-white px-3 py-2 text-xs text-neutral-600 hover:bg-neutral-50 dark:border-neutral-800 dark:bg-neutral-900 dark:text-neutral-400 dark:hover:bg-neutral-800">
-                    <span>Show generated query</span>
-                    <ChevronDown className="h-3 w-3" />
-                </CollapsibleTrigger>
-                <CollapsibleContent className="mt-2 rounded-md border border-neutral-200 bg-white p-3 text-xs dark:border-neutral-800 dark:bg-neutral-900">
-                    <div className="mb-2 font-semibold text-neutral-700 dark:text-neutral-300">
-                        Plan
-                    </div>
-                    <pre className="overflow-x-auto rounded bg-neutral-50 p-2 text-[11px] leading-relaxed dark:bg-neutral-950">
-                        {JSON.stringify(result.plan, null, 2)}
-                    </pre>
-                    <div className="mt-3 mb-2 font-semibold text-neutral-700 dark:text-neutral-300">
-                        SoQL
-                    </div>
-                    <pre className="overflow-x-auto rounded bg-neutral-50 p-2 text-[11px] leading-relaxed dark:bg-neutral-950">
-                        {JSON.stringify(result.soql, null, 2)}
-                    </pre>
-                </CollapsibleContent>
-            </Collapsible>
+            <QueryDebugPanel soql={result.soql} url={result.url} />
         </div>
     );
 }
 
-function ResultBody({ result }: { result: QueryResult }) {
+function ResultBody({
+    result,
+    locale,
+}: {
+    result: QueryResult;
+    locale: string;
+}) {
+    const { t } = useTranslation();
     const { rows, displayHint, plan } = result;
 
     if (rows.length === 0) {
         return (
             <p className="text-sm text-neutral-500">
-                No rows matched this query.
+                {t('pages.query.noRows')}
             </p>
         );
     }
@@ -299,23 +471,31 @@ function ResultBody({ result }: { result: QueryResult }) {
         return (
             <div className="flex flex-col items-center py-6">
                 <div className="text-5xl font-semibold tabular-nums">
-                    {formatNumber(value)}
+                    {formatNumber(value, locale)}
                 </div>
                 <div className="mt-1 text-sm text-neutral-500">
-                    matching vehicles
+                    {t('pages.query.matchingVehicles')}
                 </div>
             </div>
         );
     }
 
     if (displayHint === 'bars') {
-        return <BarsView rows={rows} plan={plan} />;
+        return <BarsView rows={rows} plan={plan} locale={locale} />;
     }
 
-    return <TableView rows={rows} />;
+    return <TableView rows={rows} locale={locale} />;
 }
 
-function BarsView({ rows, plan }: { rows: QueryRow[]; plan: Plan }) {
+function BarsView({
+    rows,
+    plan,
+    locale,
+}: {
+    rows: QueryRow[];
+    plan: Plan;
+    locale: string;
+}) {
     const firstRow = rows[0] ?? {};
     const groupKey =
         plan.groupBy[0] ??
@@ -324,7 +504,7 @@ function BarsView({ rows, plan }: { rows: QueryRow[]; plan: Plan }) {
     const valueKey = plan.aggregates[0]?.alias ?? findNumericKey(firstRow);
 
     if (groupKey === undefined || valueKey === undefined) {
-        return <TableView rows={rows} />;
+        return <TableView rows={rows} locale={locale} />;
     }
 
     const data = rows
@@ -369,7 +549,7 @@ function BarsView({ rows, plan }: { rows: QueryRow[]; plan: Plan }) {
                         dataKey="value"
                         position="right"
                         className="fill-foreground text-xs"
-                        formatter={(v) => formatNumber(v)}
+                        formatter={(v) => formatNumber(v, locale)}
                     />
                 </Bar>
             </BarChart>
@@ -377,7 +557,8 @@ function BarsView({ rows, plan }: { rows: QueryRow[]; plan: Plan }) {
     );
 }
 
-function TableView({ rows }: { rows: QueryRow[] }) {
+function TableView({ rows, locale }: { rows: QueryRow[]; locale: string }) {
+    const { t } = useTranslation();
     const columns = Object.keys(rows[0] ?? {});
 
     return (
@@ -397,7 +578,7 @@ function TableView({ rows }: { rows: QueryRow[] }) {
                         <TableRow key={i}>
                             {columns.map((c) => (
                                 <TableCell key={c} className="text-xs">
-                                    {formatCell(row[c])}
+                                    {formatCell(row[c], locale, t)}
                                 </TableCell>
                             ))}
                         </TableRow>
@@ -435,43 +616,141 @@ async function parseJson(response: Response): Promise<unknown> {
     }
 }
 
-function fallbackErrorForStatus(status: number): string {
-    if (status === 429) {
-        return 'You are sending requests too quickly. Try again in a moment.';
-    }
-
-    if (status === 422) {
-        return 'The request was rejected. Try rephrasing your question.';
-    }
-
-    if (status === 419) {
-        return 'Your session expired. Please refresh the page.';
-    }
-
-    if (status >= 500) {
-        return 'The server encountered an error. Try again.';
-    }
-
-    return 'Query failed.';
+function localeTag(locale: string): string {
+    return locale === 'nl' ? 'nl-NL' : 'en-US';
 }
 
-function formatNumber(v: unknown): string {
+function formatNumber(v: unknown, locale: string): string {
     const n = typeof v === 'number' ? v : Number(v);
 
-    return Number.isFinite(n) ? n.toLocaleString('nl-NL') : String(v ?? '');
+    return Number.isFinite(n)
+        ? n.toLocaleString(localeTag(locale))
+        : String(v ?? '');
 }
 
-function formatCell(v: unknown): string {
+// Module-level cache so useSyncExternalStore sees a stable reference when
+// nothing has changed (React bails out of re-renders by identity).
+const EMPTY_RECENT: string[] = [];
+let cachedRecent: string[] | null = null;
+const recentListeners = new Set<() => void>();
+
+function readRecentQueries(): string[] {
+    if (typeof window === 'undefined') {
+        return EMPTY_RECENT;
+    }
+
+    if (cachedRecent !== null) {
+        return cachedRecent;
+    }
+
+    try {
+        const raw = window.localStorage.getItem(RECENT_QUERIES_KEY);
+
+        if (raw === null) {
+            cachedRecent = EMPTY_RECENT;
+
+            return cachedRecent;
+        }
+
+        const parsed: unknown = JSON.parse(raw);
+
+        if (!Array.isArray(parsed)) {
+            cachedRecent = EMPTY_RECENT;
+
+            return cachedRecent;
+        }
+
+        cachedRecent = parsed
+            .filter((v): v is string => typeof v === 'string')
+            .slice(0, RECENT_QUERIES_MAX);
+
+        return cachedRecent;
+    } catch {
+        cachedRecent = EMPTY_RECENT;
+
+        return cachedRecent;
+    }
+}
+
+function getRecentQueriesServerSnapshot(): string[] {
+    return EMPTY_RECENT;
+}
+
+function subscribeToRecentQueries(callback: () => void): () => void {
+    recentListeners.add(callback);
+
+    const onStorage = (event: StorageEvent) => {
+        if (event.key === RECENT_QUERIES_KEY) {
+            cachedRecent = null;
+            callback();
+        }
+    };
+
+    if (typeof window !== 'undefined') {
+        window.addEventListener('storage', onStorage);
+    }
+
+    return () => {
+        recentListeners.delete(callback);
+
+        if (typeof window !== 'undefined') {
+            window.removeEventListener('storage', onStorage);
+        }
+    };
+}
+
+function notifyRecentChanged(next: string[]): void {
+    cachedRecent = next;
+    recentListeners.forEach((cb) => cb());
+}
+
+function clearRecentQueries(): void {
+    if (typeof window !== 'undefined') {
+        try {
+            window.localStorage.removeItem(RECENT_QUERIES_KEY);
+        } catch {
+            // localStorage unavailable; in-memory clear still works.
+        }
+    }
+
+    notifyRecentChanged(EMPTY_RECENT);
+}
+
+function pushRecentQuery(query: string): void {
+    const trimmed = query.trim();
+    const existing = readRecentQueries().filter((q) => q !== trimmed);
+    const next = [trimmed, ...existing].slice(0, RECENT_QUERIES_MAX);
+
+    if (typeof window !== 'undefined') {
+        try {
+            window.localStorage.setItem(
+                RECENT_QUERIES_KEY,
+                JSON.stringify(next),
+            );
+        } catch {
+            // localStorage unavailable (private mode, quota); show recent
+            // queries for this session only.
+        }
+    }
+
+    notifyRecentChanged(next);
+}
+
+function formatCell(
+    v: unknown,
+    locale: string,
+    t: (key: string) => string,
+): string {
     if (v === null || v === undefined) {
         return '—';
     }
 
     if (typeof v === 'boolean') {
-        return v ? 'Ja' : 'Nee';
+        return v ? t('pages.query.boolean.yes') : t('pages.query.boolean.no');
     }
 
     if (typeof v === 'number') {
-        return formatNumber(v);
+        return formatNumber(v, locale);
     }
 
     return String(v);
