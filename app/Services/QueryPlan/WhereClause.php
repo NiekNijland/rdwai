@@ -10,5 +10,6 @@ final readonly class WhereClause
         public string $field,
         public WhereOp $op,
         public string $value,
-    ) {}
+    ) {
+    }
 }

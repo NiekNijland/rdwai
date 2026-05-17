@@ -1,4 +1,4 @@
-import type { Bucket, QueryRow } from './types';
+import type { Bucket, Plan, QueryRow } from './types';
 
 export function localeTag(locale: string): string {
     return locale === 'nl' ? 'nl-NL' : 'en-US';
@@ -91,6 +91,16 @@ export function isDateLike(value: unknown): boolean {
     }
 
     return /^\d{4}-\d{2}-\d{2}/.test(value);
+}
+
+// The plan is authoritative for date granularity: a column appears in
+// `plan.groupBy` exactly when the user asked for a date-trunc'd breakdown and
+// the bucket on that entry says how coarse to render. Sniffing the rows
+// instead would mis-label naturally Jan-1st dates as year-truncated.
+export function bucketForColumn(plan: Plan, column: string): Bucket | null {
+    const key = plan.groupBy.find((k) => k.field === column);
+
+    return key === undefined ? null : key.bucket;
 }
 
 // Format a group-by value using the bucket from the query plan, so date-truncated

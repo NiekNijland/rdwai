@@ -15,5 +15,6 @@ final readonly class BucketExpression
     public function __construct(
         public string $alias,
         public string $expression,
-    ) {}
+    ) {
+    }
 }

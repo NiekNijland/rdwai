@@ -6,6 +6,7 @@ import {
     Sparkles,
     ThumbsDown,
     ThumbsUp,
+    X,
 } from 'lucide-react';
 import {
     useCallback,
@@ -212,6 +213,18 @@ function QueryPageInner({ sharedRun }: PageProps) {
         }
     };
 
+    const clear = (): void => {
+        abortRef.current?.abort();
+        abortRef.current = null;
+        setPrompt('');
+        setResult(null);
+        setError(null);
+        setLoading(false);
+        resetShareUrl(locale);
+    };
+
+    const canClear = prompt.length > 0 || result !== null || error !== null;
+
     const updateRating = useCallback(
         (next: { rating: Rating | null; comment: string | null }): void => {
             setResult((current) =>
@@ -270,17 +283,31 @@ function QueryPageInner({ sharedRun }: PageProps) {
                                 <span className="text-xs text-neutral-500">
                                     {t('pages.query.submitHint')}
                                 </span>
-                                <Button
-                                    onClick={() => void submit()}
-                                    disabled={
-                                        loading ||
-                                        prompt.trim().length < MIN_PROMPT_LENGTH
-                                    }
-                                >
-                                    {loading
-                                        ? t('pages.query.thinking')
-                                        : t('pages.query.ask')}
-                                </Button>
+                                <div className="flex items-center gap-2">
+                                    {canClear && (
+                                        <Button
+                                            type="button"
+                                            variant="outline"
+                                            onClick={clear}
+                                            disabled={loading}
+                                        >
+                                            <X className="mr-1 h-3 w-3" />
+                                            {t('pages.query.clearAll')}
+                                        </Button>
+                                    )}
+                                    <Button
+                                        onClick={() => void submit()}
+                                        disabled={
+                                            loading ||
+                                            prompt.trim().length <
+                                                MIN_PROMPT_LENGTH
+                                        }
+                                    >
+                                        {loading
+                                            ? t('pages.query.thinking')
+                                            : t('pages.query.ask')}
+                                    </Button>
+                                </div>
                             </div>
                         </CardContent>
                     </Card>
@@ -324,6 +351,9 @@ function sharedRunToResult(run: SharedRun): QueryResult {
         displayHint: run.displayHint,
         rating: run.rating,
         comment: run.comment,
+        model: run.model,
+        tokens: run.tokens,
+        estimatedCost: run.estimatedCost,
     };
 }
 
@@ -333,6 +363,14 @@ function updateShareUrl(locale: string, slug: string): void {
     }
 
     window.history.replaceState({}, '', buildShareUrl(locale, slug));
+}
+
+function resetShareUrl(locale: string): void {
+    if (typeof window === 'undefined') {
+        return;
+    }
+
+    window.history.replaceState({}, '', `/${locale}`);
 }
 
 function SuggestionsList({
@@ -454,18 +492,26 @@ function ErrorView({ error }: { error: QueryError }) {
 function QueryDebugPanel({
     soql,
     url,
+    model,
     responseBody,
     defaultOpen = false,
 }: {
     soql?: Record<string, string>;
     url?: string;
+    model?: string;
     responseBody?: string | null;
     defaultOpen?: boolean;
 }) {
     const { t } = useTranslation();
     const hasResponseBody = responseBody !== undefined && responseBody !== null;
+    const hasModel = model !== undefined && model !== '';
 
-    if (soql === undefined && url === undefined && !hasResponseBody) {
+    if (
+        soql === undefined &&
+        url === undefined &&
+        !hasResponseBody &&
+        !hasModel
+    ) {
         return null;
     }
 
@@ -476,6 +522,16 @@ function QueryDebugPanel({
                 <ChevronDown className="h-3 w-3" />
             </CollapsibleTrigger>
             <CollapsibleContent className="mt-2 space-y-3 rounded-md border border-neutral-200 bg-white p-3 text-xs dark:border-neutral-800 dark:bg-neutral-900">
+                {hasModel && (
+                    <div>
+                        <div className="mb-2 font-semibold text-neutral-700 dark:text-neutral-300">
+                            {t('pages.query.model')}
+                        </div>
+                        <code className="block rounded bg-neutral-50 p-2 text-[11px] dark:bg-neutral-950">
+                            {model}
+                        </code>
+                    </div>
+                )}
                 {soql && (
                     <div>
                         <div className="mb-2 font-semibold text-neutral-700 dark:text-neutral-300">
@@ -542,11 +598,16 @@ function ResultView({
         comment: string | null;
     }) => void;
 }) {
+    // A refusal plan never hits RDW, so there's no SoQL or request URL to
+    // show — skip the debug panel entirely instead of rendering empty values.
+    const isUnsupported = result.displayHint === 'unsupported';
+
     return (
         <div className="flex flex-col gap-4">
             <Card>
                 <CardHeader>
                     <CardDescription>{result.plan.explanation}</CardDescription>
+                    <UsageLine result={result} locale={locale} />
                 </CardHeader>
                 <CardContent>
                     <ResultBody result={result} locale={locale} />
@@ -565,8 +626,58 @@ function ResultView({
                 />
             )}
 
-            <QueryDebugPanel soql={result.soql} url={result.url} />
+            {!isUnsupported && (
+                <QueryDebugPanel
+                    soql={result.soql}
+                    url={result.url}
+                    model={result.model}
+                />
+            )}
         </div>
+    );
+}
+
+function UsageLine({
+    result,
+    locale,
+}: {
+    result: QueryResult;
+    locale: string;
+}) {
+    const { t } = useTranslation();
+    const total =
+        result.tokens.prompt +
+        result.tokens.completion +
+        result.tokens.cacheRead +
+        result.tokens.thought;
+
+    if (total === 0 && result.estimatedCost === null) {
+        return null;
+    }
+
+    const tokensLabel = t('pages.query.tokensCount', {
+        count: new Intl.NumberFormat(locale).format(total),
+    });
+    const costLabel =
+        result.estimatedCost === null
+            ? null
+            : t('pages.query.estimatedCost', {
+                  amount: new Intl.NumberFormat(locale, {
+                      style: 'currency',
+                      currency: 'USD',
+                      minimumFractionDigits: 4,
+                      maximumFractionDigits: 6,
+                  }).format(result.estimatedCost),
+              });
+
+    // The model id is developer-facing — it lives in the debug panel, not on
+    // the user-visible usage line.
+    const segments = [tokensLabel, costLabel].filter((s): s is string =>
+        Boolean(s),
+    );
+
+    return (
+        <p className="text-xs text-muted-foreground">{segments.join(' · ')}</p>
     );
 }
 

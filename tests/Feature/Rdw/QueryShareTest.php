@@ -48,4 +48,28 @@ final class QueryShareTest extends TestCase
                     ->where('sharedRun', null),
             );
     }
+
+    public function test_shared_run_predating_token_columns_defaults_to_empty_model_and_zero_tokens(): void
+    {
+        // Old QueryRun rows (persisted before the cost-tracking PR) have no
+        // model, token, or cost columns. The serialisation contract is
+        // non-nullable on the frontend, so the controller must coalesce.
+        QueryRun::factory()->createOne([
+            'slug' => 'legacyabc12',
+            'prompt' => 'legacy prompt',
+        ]);
+
+        $this->get(route('home') . '?q=legacyabc12')
+            ->assertOk()
+            ->assertInertia(
+                fn (Assert $page) => $page
+                    ->component('query/index')
+                    ->where('sharedRun.model', '')
+                    ->where('sharedRun.tokens.prompt', 0)
+                    ->where('sharedRun.tokens.completion', 0)
+                    ->where('sharedRun.tokens.cacheRead', 0)
+                    ->where('sharedRun.tokens.thought', 0)
+                    ->where('sharedRun.estimatedCost', null),
+            );
+    }
 }

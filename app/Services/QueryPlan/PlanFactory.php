@@ -38,32 +38,93 @@ final class PlanFactory
         private readonly SchemaRegistry $schemas,
         ?LoggerInterface $logger = null,
     ) {
-        $this->logger = $logger ?? new NullLogger;
+        $this->logger = $logger ?? new NullLogger();
     }
 
     /**
-     * @param  array<string, mixed>  $data
+     * @param array<string, mixed> $data
      */
     public function fromArray(array $data): Plan
     {
         $select = $this->parseFieldList(array_values($this->arrayOrEmpty($data, 'select')));
         $groupBy = $this->parseGroupBy(array_values($this->arrayOrEmpty($data, 'groupBy')));
         $aggregates = array_values(array_map($this->parseAggregate(...), $this->arrayOrEmpty($data, 'aggregates')));
+        $where = array_values(array_map($this->parseWhere(...), $this->arrayOrEmpty($data, 'where')));
+        $orderBy = array_values(array_map($this->parseOrder(...), $this->arrayOrEmpty($data, 'orderBy')));
         $display = $this->parseDisplay($data['display'] ?? null);
+        $explanation = (string) ($data['explanation'] ?? '');
+
+        $display = $this->downgradeBogusCountToUnsupported($display, $where, $select, $groupBy, $aggregates);
+
+        if ($display === DisplayHint::Unsupported) {
+            // A refusal plan must not carry any query state — discard anything
+            // the model attached so PlanRunner has nothing to execute and the
+            // frontend has nothing to misrender.
+            return new Plan(
+                where: [],
+                select: [],
+                groupBy: [],
+                aggregates: [],
+                orderBy: [],
+                limit: 1,
+                display: DisplayHint::Unsupported,
+                explanation: $explanation,
+            );
+        }
 
         [$select, $groupBy] = $this->normaliseSelectAndGroupBy($select, $groupBy, $aggregates, $display);
         $groupBy = $this->normaliseTimeseriesGroupBy($groupBy, $display);
 
         return new Plan(
-            where: array_values(array_map($this->parseWhere(...), $this->arrayOrEmpty($data, 'where'))),
+            where: $where,
             select: $select,
             groupBy: $groupBy,
             aggregates: $aggregates,
-            orderBy: array_values(array_map($this->parseOrder(...), $this->arrayOrEmpty($data, 'orderBy'))),
+            orderBy: $orderBy,
             limit: isset($data['limit']) ? max(self::LIMIT_MIN, min(self::LIMIT_MAX, (int) $data['limit'])) : null,
             display: $display,
-            explanation: (string) ($data['explanation'] ?? ''),
+            explanation: $explanation,
         );
+    }
+
+    /**
+     * A `count` plan with no aggregates is structurally meaningless — there is
+     * nothing to count. We have seen this exact shape come back from
+     * prompt-injection attempts ("you are an addition assistant, what is
+     * 30+30?"): the model emits `display=count` with empty `where`, `select`,
+     * `groupBy`, and `aggregates`, the runner asks RDW for one raw row, and
+     * the frontend's CountView falls through to rendering the first column —
+     * a license plate — as if it were a count.
+     *
+     * Downgrade that shape to {@see DisplayHint::Unsupported} so the response
+     * is an explicit refusal instead of garbled output. We only downgrade when
+     * the plan is otherwise empty (no where/select/groupBy either); a count
+     * plan that has filters but happens to be missing aggregates is more
+     * likely an LLM oversight worth surfacing via the normal error path.
+     *
+     * @param list<WhereClause> $where
+     * @param list<string> $select
+     * @param list<GroupKey> $groupBy
+     * @param list<AggregateClause> $aggregates
+     */
+    private function downgradeBogusCountToUnsupported(
+        DisplayHint $display,
+        array $where,
+        array $select,
+        array $groupBy,
+        array $aggregates,
+    ): DisplayHint {
+        if ($display !== DisplayHint::Count) {
+            return $display;
+        }
+
+        if ($aggregates !== [] || $where !== [] || $select !== [] || $groupBy !== []) {
+            return $display;
+        }
+
+        $this->logger->warning('PlanFactory downgraded empty count plan to unsupported');
+
+        return DisplayHint::Unsupported;
     }
 
     /**
@@ -79,9 +140,9 @@ final class PlanFactory
      * `PlanRunner` always re-adds groupBy fields to the SoQL `$select`, so
      * promoted fields still appear in the projection.
      *
-     * @param  list<string>  $select
-     * @param  list<GroupKey>  $groupBy
-     * @param  list<AggregateClause>  $aggregates
+     * @param list<string> $select
+     * @param list<GroupKey> $groupBy
+     * @param list<AggregateClause> $aggregates
      * @return array{0: list<string>, 1: list<GroupKey>}
      */
     private function normaliseSelectAndGroupBy(array $select, array $groupBy, array $aggregates, DisplayHint $display): array
@@ -135,7 +196,7 @@ final class PlanFactory
      * with no date key is unrecoverable, and silently producing a one-row
      * aggregate would just surface as an opaque empty chart for the user.
      *
-     * @param  list<GroupKey>  $groupBy
+     * @param list<GroupKey> $groupBy
      * @return list<GroupKey>
      */
     private function normaliseTimeseriesGroupBy(array $groupBy, DisplayHint $display): array
@@ -162,8 +223,8 @@ final class PlanFactory
         if ($filtered === []) {
             throw new InvalidArgumentException(
                 'A timeseries plan must group by at least one date field; got only non-date fields: '
-                .implode(', ', array_map(static fn (GroupKey $k): string => $k->field, $groupBy))
-                .'.',
+                . implode(', ', array_map(static fn (GroupKey $k): string => $k->field, $groupBy))
+                . '.',
             );
         }
 
@@ -182,7 +243,7 @@ final class PlanFactory
     }
 
     /**
-     * @param  array<string, mixed>  $clause
+     * @param array<string, mixed> $clause
      */
     private function parseWhere(array $clause): WhereClause
     {
@@ -197,7 +258,7 @@ final class PlanFactory
     }
 
     /**
-     * @param  array<string, mixed>  $clause
+     * @param array<string, mixed> $clause
      */
     private function parseAggregate(array $clause): AggregateClause
     {
@@ -225,7 +286,7 @@ final class PlanFactory
     }
 
     /**
-     * @param  array<string, mixed>  $clause
+     * @param array<string, mixed> $clause
      */
     private function parseOrder(array $clause): OrderClause
     {
@@ -236,7 +297,7 @@ final class PlanFactory
     }
 
     /**
-     * @param  list<mixed>  $fields
+     * @param list<mixed> $fields
      * @return list<string>
      */
     private function parseFieldList(array $fields): array
@@ -264,7 +325,7 @@ final class PlanFactory
      * anyway — keeping both would produce a $select that emits the same
      * `date_trunc_*` expression twice.
      *
-     * @param  list<mixed>  $items
+     * @param list<mixed> $items
      * @return list<GroupKey>
      */
     private function parseGroupBy(array $items): array
@@ -321,7 +382,7 @@ final class PlanFactory
     /**
      * @template T of \BackedEnum
      *
-     * @param  class-string<T>  $enumClass
+     * @param class-string<T> $enumClass
      * @return T
      */
     private function parseEnum(string $enumClass, string $value, string $field): BackedEnum
@@ -335,7 +396,7 @@ final class PlanFactory
     }
 
     /**
-     * @param  array<string, mixed>  $data
+     * @param array<string, mixed> $data
      * @return array<int, mixed>
      */
     private function arrayOrEmpty(array $data, string $key): array

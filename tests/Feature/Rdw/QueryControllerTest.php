@@ -15,6 +15,8 @@ use NiekNijland\RDW\Http\SocrataClient;
 use NiekNijland\RDW\Rdw;
 use Prism\Prism\Facades\Prism;
 use Prism\Prism\Testing\StructuredResponseFake;
+use Prism\Prism\ValueObjects\Meta;
+use Prism\Prism\ValueObjects\Usage;
 use RuntimeException;
 use Tests\TestCase;
 
@@ -29,20 +31,28 @@ final class QueryControllerTest extends TestCase
 
     public function test_run_returns_plan_rows_and_soql_for_a_well_formed_response(): void
     {
-        $this->fakePrismWithPlan([
-            'where' => [['field' => 'Brand', 'op' => 'eq', 'value' => 'VOLKSWAGEN']],
-            'select' => [],
-            'groupBy' => ['PrimaryColor'],
-            'aggregates' => [['fn' => 'count', 'field' => '*', 'alias' => 'n']],
-            'orderBy' => [['expr' => 'n', 'direction' => 'desc']],
-            'limit' => 25,
-            'display' => 'bars',
-            'explanation' => 'Colors of VWs',
-        ]);
+        $this->fakePrismWithPlan(
+            [
+                'where' => [['field' => 'Brand', 'op' => 'eq', 'value' => 'VOLKSWAGEN']],
+                'select' => [],
+                'groupBy' => [['field' => 'PrimaryColor', 'bucket' => 'none']],
+                'aggregates' => [['fn' => 'count', 'field' => '*', 'alias' => 'n']],
+                'orderBy' => [['expr' => 'n', 'direction' => 'desc']],
+                'limit' => 25,
+                'display' => 'bars',
+                'explanation' => 'Colors of VWs',
+            ],
+            usage: new Usage(promptTokens: 800, completionTokens: 120),
+            model: 'gpt-4.1-nano',
+        );
 
         $this->fakeRdwWithRows([
             ['eerste_kleur' => 'WIT', 'n' => '42'],
             ['eerste_kleur' => 'ZWART', 'n' => '17'],
+        ]);
+
+        config()->set('rdwai.model_prices', [
+            'gpt-4.1-nano' => ['input' => 0.10, 'cached_input' => 0.025, 'output' => 0.40],
         ]);
 
         $response = $this->postJson(route('rdw.query.run'), ['prompt' => 'Count colors']);
@@ -53,7 +63,14 @@ final class QueryControllerTest extends TestCase
             ->assertJsonPath('plan.aggregates.0.alias', 'n')
             ->assertJsonPath('rows.0.PrimaryColor', 'WIT')
             ->assertJsonPath('rows.0.n', '42')
-            ->assertJsonStructure(['plan', 'soql', 'rows', 'displayHint']);
+            ->assertJsonPath('model', 'gpt-4.1-nano')
+            ->assertJsonPath('tokens.prompt', 800)
+            ->assertJsonPath('tokens.completion', 120)
+            ->assertJsonPath('tokens.cacheRead', 0)
+            ->assertJsonPath('tokens.thought', 0)
+            ->assertJsonStructure(['plan', 'soql', 'rows', 'displayHint', 'model', 'tokens', 'estimatedCost']);
+
+        self::assertNotNull($response->json('estimatedCost'));
     }
 
     public function test_run_validates_prompt_length(): void
@@ -151,11 +168,17 @@ final class QueryControllerTest extends TestCase
     /**
      * @param array<string, mixed> $plan
      */
-    private function fakePrismWithPlan(array $plan): void
+    private function fakePrismWithPlan(array $plan, ?Usage $usage = null, string $model = 'fake'): void
     {
-        Prism::fake([
-            StructuredResponseFake::make()->withStructured($plan),
-        ]);
+        $fake = StructuredResponseFake::make()->withStructured($plan);
+
+        if ($usage !== null) {
+            $fake = $fake->withUsage($usage);
+        }
+
+        $fake = $fake->withMeta(new Meta(id: 'fake', model: $model));
+
+        Prism::fake([$fake]);
     }
 
     /**

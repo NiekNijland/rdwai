@@ -275,8 +275,37 @@ final class PlanRunnerTest extends TestCase
         self::assertSame('25', $soql['$limit']);
     }
 
+    public function test_unsupported_display_short_circuits_without_hitting_rdw(): void
+    {
+        // No mock response is queued — if the runner tries to call RDW the
+        // Guzzle MockHandler will throw "queue is empty", failing the test.
+        $mock = new MockHandler();
+        $stack = HandlerStack::create($mock);
+        $guzzle = new GuzzleClient([
+            'base_uri' => 'https://opendata.rdw.nl/',
+            'handler' => $stack,
+        ]);
+        $rdw = new Rdw(http: new SocrataClient(new RdwConfiguration(), $guzzle));
+        $runner = new PlanRunner($rdw);
+
+        $result = $runner->run(new Plan(
+            where: [],
+            select: [],
+            groupBy: [],
+            aggregates: [],
+            orderBy: [],
+            limit: 1,
+            display: DisplayHint::Unsupported,
+            explanation: 'Off-topic.',
+        ));
+
+        self::assertSame([], $result['rows']);
+        self::assertSame([], $result['soql']);
+        self::assertSame('', $result['url']);
+    }
+
     /**
-     * @param  list<array<string, mixed>>  $rows
+     * @param list<array<string, mixed>> $rows
      */
     private function runnerReturning(array $rows): PlanRunner
     {
@@ -290,7 +319,7 @@ final class PlanRunnerTest extends TestCase
             'handler' => $stack,
         ]);
 
-        $socrata = new SocrataClient(new RdwConfiguration, $guzzle);
+        $socrata = new SocrataClient(new RdwConfiguration(), $guzzle);
         $rdw = new Rdw(http: $socrata);
 
         return new PlanRunner($rdw);

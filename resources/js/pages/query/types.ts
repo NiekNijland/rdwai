@@ -18,7 +18,8 @@ export type DisplayHint =
     | 'histogram'
     | 'timeseries'
     | 'table'
-    | 'record';
+    | 'record'
+    | 'unsupported';
 
 export type Rating = 'up' | 'down';
 
@@ -35,6 +36,13 @@ export type Plan = {
 
 export type QueryRow = Record<string, unknown>;
 
+export type TokenUsage = {
+    prompt: number;
+    completion: number;
+    cacheRead: number;
+    thought: number;
+};
+
 export type QueryResult = {
     slug?: string;
     prompt: string;
@@ -45,6 +53,9 @@ export type QueryResult = {
     displayHint: DisplayHint;
     rating: Rating | null;
     comment: string | null;
+    model: string;
+    tokens: TokenUsage;
+    estimatedCost: number | null;
 };
 
 export type SharedRun = {
@@ -58,6 +69,9 @@ export type SharedRun = {
     displayHint: DisplayHint;
     rating: Rating | null;
     comment: string | null;
+    model: string;
+    tokens: TokenUsage;
+    estimatedCost: number | null;
 };
 
 export type RunResponse = {
@@ -67,6 +81,9 @@ export type RunResponse = {
     url: string;
     rows: QueryRow[];
     displayHint: DisplayHint;
+    model: string;
+    tokens: TokenUsage;
+    estimatedCost: number | null;
 };
 
 export type ErrorResponse = {

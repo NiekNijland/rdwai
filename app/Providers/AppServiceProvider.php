@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Providers;
 
+use App\Services\QueryPlan\CostEstimator;
 use Carbon\CarbonImmutable;
 use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Http\Request;
@@ -33,6 +34,13 @@ class AppServiceProvider extends ServiceProvider
         // app (e.g. PlanFactory) so schema lookups cannot diverge across
         // collaborators.
         $this->app->singleton(SchemaRegistry::class, static fn ($app): SchemaRegistry => $app->make(Rdw::class)->schemas());
+
+        // Bind (not singleton) so a `config()->set('rdwai.model_prices', …)`
+        // call from a test that runs *after* boot is still honoured the next
+        // time the estimator is resolved.
+        $this->app->bind(CostEstimator::class, static fn (): CostEstimator => new CostEstimator(
+            (array) config('rdwai.model_prices', []),
+        ));
     }
 
     /**

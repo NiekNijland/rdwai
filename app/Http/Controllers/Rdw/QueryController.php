@@ -107,6 +107,9 @@ final class QueryController extends Controller
             soql: $result['soql'],
             url: $result['url'],
             userId: $user !== null ? (string) $user->getAuthIdentifier() : null,
+            model: $result['model'],
+            tokens: $result['tokens'],
+            estimatedCost: $result['estimatedCost'],
         );
 
         return response()->json([
@@ -116,6 +119,9 @@ final class QueryController extends Controller
             'url' => $result['url'],
             'rows' => $result['rows'],
             'displayHint' => $result['plan']->display->value,
+            'model' => $result['model'],
+            'tokens' => $result['tokens'],
+            'estimatedCost' => $result['estimatedCost'],
         ]);
     }
 
@@ -172,6 +178,16 @@ final class QueryController extends Controller
             'displayHint' => $run->display_hint,
             'rating' => $run->rating,
             'comment' => $run->comment,
+            // Coalesce nullable model to '' so the TS shape stays non-nullable
+            // and the frontend's `Boolean(s)` filter still hides empty values.
+            'model' => $run->model ?? '',
+            'tokens' => [
+                'prompt' => $run->prompt_tokens ?? 0,
+                'completion' => $run->completion_tokens ?? 0,
+                'cacheRead' => $run->cache_read_tokens ?? 0,
+                'thought' => $run->thought_tokens ?? 0,
+            ],
+            'estimatedCost' => $run->estimated_cost,
         ];
     }
 }

@@ -400,10 +400,65 @@ final class PlanFactoryTest extends TestCase
     {
         $factory = $this->factory();
 
+        // Include one aggregate so an empty count plan isn't downgraded to
+        // unsupported by the bogus-count guard; the assertion here is purely
+        // about display-hint parseability.
         foreach (DisplayHint::cases() as $hint) {
-            $plan = $factory->fromArray(['display' => $hint->value]);
+            $plan = $factory->fromArray([
+                'display' => $hint->value,
+                'aggregates' => [['fn' => 'count', 'field' => '*', 'alias' => 'n']],
+            ]);
             self::assertSame($hint, $plan->display);
         }
+    }
+
+    public function test_downgrades_empty_count_plan_to_unsupported(): void
+    {
+        $factory = $this->factory();
+
+        $plan = $factory->fromArray([
+            'display' => 'count',
+            'where' => [],
+            'select' => [],
+            'groupBy' => [],
+            'aggregates' => [],
+            'explanation' => 'Counts the result of 30 + 30.',
+        ]);
+
+        self::assertSame(DisplayHint::Unsupported, $plan->display);
+        self::assertSame([], $plan->where);
+        self::assertSame([], $plan->select);
+        self::assertSame([], $plan->groupBy);
+        self::assertSame([], $plan->aggregates);
+        self::assertSame(1, $plan->limit);
+        self::assertSame('Counts the result of 30 + 30.', $plan->explanation);
+    }
+
+    public function test_clears_query_state_for_unsupported_display(): void
+    {
+        $factory = $this->factory();
+
+        // Even if the model attaches stray clauses to a refusal plan, the
+        // factory must strip them so PlanRunner has nothing to execute.
+        $plan = $factory->fromArray([
+            'display' => 'unsupported',
+            'where' => [['field' => 'Brand', 'op' => 'eq', 'value' => 'TOYOTA']],
+            'select' => ['LicensePlate'],
+            'groupBy' => [['field' => 'PrimaryColor', 'bucket' => 'none']],
+            'aggregates' => [['fn' => 'count', 'field' => '*', 'alias' => 'n']],
+            'orderBy' => [['expr' => 'n', 'direction' => 'desc']],
+            'limit' => 500,
+            'explanation' => 'Not a vehicle question.',
+        ]);
+
+        self::assertSame(DisplayHint::Unsupported, $plan->display);
+        self::assertSame([], $plan->where);
+        self::assertSame([], $plan->select);
+        self::assertSame([], $plan->groupBy);
+        self::assertSame([], $plan->aggregates);
+        self::assertSame([], $plan->orderBy);
+        self::assertSame(1, $plan->limit);
+        self::assertSame('Not a vehicle question.', $plan->explanation);
     }
 
     public function test_rejects_invalid_aggregate_alias_instead_of_silently_rewriting(): void
@@ -452,7 +507,7 @@ final class PlanFactoryTest extends TestCase
 
     private function factory(): PlanFactory
     {
-        return new PlanFactory(new SchemaRegistry);
+        return new PlanFactory(new SchemaRegistry());
     }
 
     private function planWithLimit(PlanFactory $factory, ?int $limit): Plan

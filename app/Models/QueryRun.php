@@ -26,6 +26,12 @@ use MongoDB\Laravel\Eloquent\Model;
  * @property string|null $rating
  * @property string|null $comment
  * @property \Illuminate\Support\Carbon|null $rated_at
+ * @property string|null $model
+ * @property int|null $prompt_tokens
+ * @property int|null $completion_tokens
+ * @property int|null $cache_read_tokens
+ * @property int|null $thought_tokens
+ * @property float|null $estimated_cost
  * @property \Illuminate\Support\Carbon $created_at
  * @property \Illuminate\Support\Carbon $updated_at
  *
@@ -45,6 +51,12 @@ use MongoDB\Laravel\Eloquent\Model;
     'rating',
     'comment',
     'rated_at',
+    'model',
+    'prompt_tokens',
+    'completion_tokens',
+    'cache_read_tokens',
+    'thought_tokens',
+    'estimated_cost',
 ])]
 class QueryRun extends Model
 {
@@ -67,6 +79,11 @@ class QueryRun extends Model
             'soql' => 'array',
             'rows' => 'array',
             'rated_at' => 'datetime',
+            'prompt_tokens' => 'integer',
+            'completion_tokens' => 'integer',
+            'cache_read_tokens' => 'integer',
+            'thought_tokens' => 'integer',
+            'estimated_cost' => 'float',
         ];
     }
 }

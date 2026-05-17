@@ -35,6 +35,14 @@ final class QueryRateLimitTest extends TestCase
             'rows' => [],
             'soql' => [],
             'url' => 'https://opendata.rdw.nl/resource/test.json',
+            'model' => 'fake',
+            'tokens' => [
+                'prompt' => 0,
+                'completion' => 0,
+                'cacheRead' => 0,
+                'thought' => 0,
+            ],
+            'estimatedCost' => null,
         ]);
         $this->app->instance(RunNaturalLanguageQuery::class, $mock);
     }

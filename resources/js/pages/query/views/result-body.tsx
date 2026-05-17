@@ -10,6 +10,7 @@ import { StackedBarsView } from './stacked-bars-view';
 import { StatsView } from './stats-view';
 import { TableView } from './table-view';
 import { TimeseriesView } from './timeseries-view';
+import { UnsupportedView } from './unsupported-view';
 
 export function ResultBody({
     result,
@@ -21,6 +22,12 @@ export function ResultBody({
     const { t } = useTranslation();
     const { rows, displayHint, plan } = result;
 
+    // Unsupported is a refusal, not a data shortage — show it before the empty
+    // check so an off-topic question doesn't render as "no rows matched".
+    if (displayHint === 'unsupported') {
+        return <UnsupportedView />;
+    }
+
     if (rows.length === 0) {
         return (
             <p className="text-sm text-neutral-500">
@@ -29,7 +36,7 @@ export function ResultBody({
         );
     }
 
-    const table = <TableView rows={rows} locale={locale} />;
+    const table = <TableView rows={rows} plan={plan} locale={locale} />;
 
     switch (displayHint) {
         case 'count':

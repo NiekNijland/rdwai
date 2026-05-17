@@ -20,7 +20,7 @@ final class PlanPresenter
      * this is purely a read-path compatibility shim for QueryRun documents
      * stored before the groupBy schema gained buckets.
      *
-     * @param  array<string, mixed>  $plan
+     * @param array<string, mixed> $plan
      * @return array<string, mixed>
      */
     public static function normalisePersisted(array $plan): array

@@ -9,5 +9,6 @@ final readonly class OrderClause
     public function __construct(
         public string $expr,
         public OrderDirection $direction,
-    ) {}
+    ) {
+    }
 }

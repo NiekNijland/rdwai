@@ -8,14 +8,21 @@ import {
 } from '@/components/ui/table';
 import { useTranslation } from '@/hooks/use-translation';
 
-import { formatCell, humanizePascalCase } from '../format';
-import type { QueryRow } from '../types';
+import {
+    bucketForColumn,
+    formatBucketLabel,
+    formatCell,
+    humanizePascalCase,
+} from '../format';
+import type { Plan, QueryRow } from '../types';
 
 export function TableView({
     rows,
+    plan,
     locale,
 }: {
     rows: QueryRow[];
+    plan: Plan;
     locale: string;
 }) {
     const { t } = useTranslation();
@@ -36,11 +43,24 @@ export function TableView({
                 <TableBody>
                     {rows.map((row, i) => (
                         <TableRow key={i}>
-                            {columns.map((c) => (
-                                <TableCell key={c} className="text-xs">
-                                    {formatCell(row[c], locale, t)}
-                                </TableCell>
-                            ))}
+                            {columns.map((c) => {
+                                const value = row[c];
+                                const bucket = bucketForColumn(plan, c);
+                                const formatted =
+                                    bucket !== null
+                                        ? formatBucketLabel(
+                                              value,
+                                              bucket,
+                                              locale,
+                                          )
+                                        : formatCell(value, locale, t);
+
+                                return (
+                                    <TableCell key={c} className="text-xs">
+                                        {formatted}
+                                    </TableCell>
+                                );
+                            })}
                         </TableRow>
                     ))}
                 </TableBody>

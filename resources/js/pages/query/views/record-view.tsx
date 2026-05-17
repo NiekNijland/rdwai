@@ -1,7 +1,12 @@
 import { useTranslation } from '@/hooks/use-translation';
 import { cn } from '@/lib/utils';
 
-import { formatCell, humanizePascalCase } from '../format';
+import {
+    formatBucketLabel,
+    formatCell,
+    humanizePascalCase,
+    isDateLike,
+} from '../format';
 import type { QueryRow } from '../types';
 
 const SECTION_ORDER = [
@@ -127,7 +132,13 @@ export function RecordView({
                                             {humanizePascalCase(field)}
                                         </dt>
                                         <dd className="text-sm tabular-nums">
-                                            {formatCell(value, locale, t)}
+                                            {isDateLike(value)
+                                                ? formatBucketLabel(
+                                                      value,
+                                                      'day',
+                                                      locale,
+                                                  )
+                                                : formatCell(value, locale, t)}
                                         </dd>
                                     </div>
                                 ))}

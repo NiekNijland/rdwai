@@ -15,4 +15,5 @@ enum DisplayHint: string
     case Timeseries = 'timeseries';
     case Table = 'table';
     case Record = 'record';
+    case Unsupported = 'unsupported';
 }
