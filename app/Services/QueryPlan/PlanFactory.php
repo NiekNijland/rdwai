@@ -6,7 +6,11 @@ namespace App\Services\QueryPlan;
 
 use BackedEnum;
 use InvalidArgumentException;
+use NiekNijland\RDW\Datasets\DatasetId;
 use NiekNijland\RDW\Fields\RegisteredVehicleField;
+use NiekNijland\RDW\Schema\CastType;
+use NiekNijland\RDW\Schema\DatasetSchema;
+use NiekNijland\RDW\Schema\SchemaRegistry;
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
 
@@ -30,22 +34,25 @@ final class PlanFactory
 
     private readonly LoggerInterface $logger;
 
-    public function __construct(?LoggerInterface $logger = null)
-    {
-        $this->logger = $logger ?? new NullLogger();
+    public function __construct(
+        private readonly SchemaRegistry $schemas,
+        ?LoggerInterface $logger = null,
+    ) {
+        $this->logger = $logger ?? new NullLogger;
     }
 
     /**
-     * @param array<string, mixed> $data
+     * @param  array<string, mixed>  $data
      */
     public function fromArray(array $data): Plan
     {
         $select = $this->parseFieldList(array_values($this->arrayOrEmpty($data, 'select')));
-        $groupBy = $this->parseFieldList(array_values($this->arrayOrEmpty($data, 'groupBy')));
+        $groupBy = $this->parseGroupBy(array_values($this->arrayOrEmpty($data, 'groupBy')));
         $aggregates = array_values(array_map($this->parseAggregate(...), $this->arrayOrEmpty($data, 'aggregates')));
         $display = $this->parseDisplay($data['display'] ?? null);
 
         [$select, $groupBy] = $this->normaliseSelectAndGroupBy($select, $groupBy, $aggregates, $display);
+        $groupBy = $this->normaliseTimeseriesGroupBy($groupBy, $display);
 
         return new Plan(
             where: array_values(array_map($this->parseWhere(...), $this->arrayOrEmpty($data, 'where'))),
@@ -72,10 +79,10 @@ final class PlanFactory
      * `PlanRunner` always re-adds groupBy fields to the SoQL `$select`, so
      * promoted fields still appear in the projection.
      *
-     * @param list<string> $select
-     * @param list<string> $groupBy
-     * @param list<AggregateClause> $aggregates
-     * @return array{0: list<string>, 1: list<string>}
+     * @param  list<string>  $select
+     * @param  list<GroupKey>  $groupBy
+     * @param  list<AggregateClause>  $aggregates
+     * @return array{0: list<string>, 1: list<GroupKey>}
      */
     private function normaliseSelectAndGroupBy(array $select, array $groupBy, array $aggregates, DisplayHint $display): array
     {
@@ -91,19 +98,91 @@ final class PlanFactory
             return [[], $groupBy];
         }
 
-        $merged = array_values(array_unique([...$groupBy, ...$select]));
+        $schema = $this->schemas->get(DatasetId::RegisteredVehicles);
+        $existingFields = array_map(static fn (GroupKey $k): string => $k->field, $groupBy);
+        $promoted = $groupBy;
+        foreach ($select as $field) {
+            if (in_array($field, $existingFields, true)) {
+                continue;
+            }
+            // If the LLM put a date field in `select` for a timeseries display,
+            // it almost certainly forgot to put it in `groupBy` with a bucket.
+            // Default to month — the most common cadence — rather than letting
+            // it through as Bucket::None and producing a flatlined per-day chart.
+            $bucket = $display === DisplayHint::Timeseries && self::isDateField($schema, $field)
+                ? Bucket::Month
+                : Bucket::None;
+            $promoted[] = new GroupKey($field, $bucket);
+            $existingFields[] = $field;
+        }
 
         $this->logger->debug('PlanFactory promoted select into groupBy', [
             'originalSelect' => $select,
-            'originalGroupBy' => $groupBy,
-            'mergedGroupBy' => $merged,
+            'originalGroupBy' => array_map(static fn (GroupKey $k): string => $k->field, $groupBy),
+            'mergedGroupBy' => array_map(static fn (GroupKey $k): string => $k->field, $promoted),
         ]);
 
-        return [[], $merged];
+        return [[], $promoted];
     }
 
     /**
-     * @param array<string, mixed> $clause
+     * For a `timeseries` display the x-axis must be a date. The LLM has been
+     * observed adding `LicensePlate` (or other per-row identifiers) alongside
+     * the date in groupBy, which makes count(*) collapse to 1 per row and the
+     * chart flatlines. Drop any non-date columns from groupBy in that case.
+     *
+     * If stripping non-date fields leaves groupBy empty we throw: a timeseries
+     * with no date key is unrecoverable, and silently producing a one-row
+     * aggregate would just surface as an opaque empty chart for the user.
+     *
+     * @param  list<GroupKey>  $groupBy
+     * @return list<GroupKey>
+     */
+    private function normaliseTimeseriesGroupBy(array $groupBy, DisplayHint $display): array
+    {
+        if ($display !== DisplayHint::Timeseries || $groupBy === []) {
+            return $groupBy;
+        }
+
+        $schema = $this->schemas->get(DatasetId::RegisteredVehicles);
+        $filtered = array_values(array_filter(
+            $groupBy,
+            static fn (GroupKey $k): bool => self::isDateField($schema, $k->field),
+        ));
+
+        if (count($filtered) === count($groupBy)) {
+            return $groupBy;
+        }
+
+        $this->logger->warning('PlanFactory dropped non-date fields from timeseries groupBy', [
+            'originalGroupBy' => array_map(static fn (GroupKey $k): string => $k->field, $groupBy),
+            'filteredGroupBy' => array_map(static fn (GroupKey $k): string => $k->field, $filtered),
+        ]);
+
+        if ($filtered === []) {
+            throw new InvalidArgumentException(
+                'A timeseries plan must group by at least one date field; got only non-date fields: '
+                .implode(', ', array_map(static fn (GroupKey $k): string => $k->field, $groupBy))
+                .'.',
+            );
+        }
+
+        return $filtered;
+    }
+
+    private static function isDateField(DatasetSchema $schema, string $enumCase): bool
+    {
+        $descriptor = $schema->byEnumCase[$enumCase] ?? null;
+        if ($descriptor === null) {
+            return false;
+        }
+
+        return $descriptor->cast === CastType::CalendarDate
+            || $descriptor->cast === CastType::NumericDate;
+    }
+
+    /**
+     * @param  array<string, mixed>  $clause
      */
     private function parseWhere(array $clause): WhereClause
     {
@@ -118,7 +197,7 @@ final class PlanFactory
     }
 
     /**
-     * @param array<string, mixed> $clause
+     * @param  array<string, mixed>  $clause
      */
     private function parseAggregate(array $clause): AggregateClause
     {
@@ -146,7 +225,7 @@ final class PlanFactory
     }
 
     /**
-     * @param array<string, mixed> $clause
+     * @param  array<string, mixed>  $clause
      */
     private function parseOrder(array $clause): OrderClause
     {
@@ -157,7 +236,7 @@ final class PlanFactory
     }
 
     /**
-     * @param list<mixed> $fields
+     * @param  list<mixed>  $fields
      * @return list<string>
      */
     private function parseFieldList(array $fields): array
@@ -167,6 +246,61 @@ final class PlanFactory
             $name = (string) $f;
             $this->assertFieldExists($name);
             $out[] = $name;
+        }
+
+        return $out;
+    }
+
+    /**
+     * Parses the strict `{field, bucket}` shape Prism emits (matching the
+     * JSON schema in {@see PlanSchema}). A bucket on a non-date field is
+     * cleared with a warning rather than rejected — the LLM occasionally
+     * picks a bucket for an integer field and the right repair is to drop
+     * the bucket, not to fail the whole query.
+     *
+     * Duplicate fields are silently deduped (first occurrence wins): RDW
+     * rejects a `$group` with the same column twice with HTTP 400, and the
+     * runner's per-field bucket map would only hold one of the duplicates
+     * anyway — keeping both would produce a $select that emits the same
+     * `date_trunc_*` expression twice.
+     *
+     * @param  list<mixed>  $items
+     * @return list<GroupKey>
+     */
+    private function parseGroupBy(array $items): array
+    {
+        $schema = $this->schemas->get(DatasetId::RegisteredVehicles);
+        $out = [];
+        $seen = [];
+        foreach ($items as $item) {
+            if (! is_array($item)) {
+                throw new InvalidArgumentException('groupBy items must be {field, bucket} objects.');
+            }
+
+            $field = (string) ($item['field'] ?? '');
+            $bucket = $this->parseEnum(Bucket::class, (string) ($item['bucket'] ?? 'none'), 'groupBy.bucket');
+
+            $this->assertFieldExists($field);
+
+            if (isset($seen[$field])) {
+                $this->logger->warning('PlanFactory dropped duplicate groupBy field', [
+                    'field' => $field,
+                    'bucket' => $bucket->value,
+                ]);
+
+                continue;
+            }
+            $seen[$field] = true;
+
+            if ($bucket !== Bucket::None && ! self::isDateField($schema, $field)) {
+                $this->logger->warning('PlanFactory cleared bucket on non-date groupBy field', [
+                    'field' => $field,
+                    'bucket' => $bucket->value,
+                ]);
+                $bucket = Bucket::None;
+            }
+
+            $out[] = new GroupKey($field, $bucket);
         }
 
         return $out;
@@ -187,7 +321,7 @@ final class PlanFactory
     /**
      * @template T of \BackedEnum
      *
-     * @param class-string<T> $enumClass
+     * @param  class-string<T>  $enumClass
      * @return T
      */
     private function parseEnum(string $enumClass, string $value, string $field): BackedEnum
@@ -201,7 +335,7 @@ final class PlanFactory
     }
 
     /**
-     * @param array<string, mixed> $data
+     * @param  array<string, mixed>  $data
      * @return array<int, mixed>
      */
     private function arrayOrEmpty(array $data, string $key): array

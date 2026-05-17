@@ -53,7 +53,9 @@ export function humanizePascalCase(name: string): string {
 
         const lower = token.toLowerCase();
 
-        return index === 0 ? lower.charAt(0).toUpperCase() + lower.slice(1) : lower;
+        return index === 0
+            ? lower.charAt(0).toUpperCase() + lower.slice(1)
+            : lower;
     });
 
     return normalized.join(' ');

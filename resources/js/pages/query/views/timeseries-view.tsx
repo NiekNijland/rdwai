@@ -7,12 +7,7 @@ import {
 } from '@/components/ui/chart';
 import type { ChartConfig } from '@/components/ui/chart';
 
-import {
-    findNumericKey,
-    formatNumber,
-    isDateLike,
-    localeTag,
-} from '../format';
+import { findNumericKey, formatNumber, isDateLike, localeTag } from '../format';
 import type { Plan, QueryRow } from '../types';
 
 export function TimeseriesView({
@@ -27,8 +22,9 @@ export function TimeseriesView({
     fallback: React.ReactNode;
 }) {
     const firstRow = rows[0] ?? {};
+    const groupFields = plan.groupBy.map((k) => k.field);
     const dateKey =
-        plan.groupBy.find((k) => isDateLike(firstRow[k])) ?? plan.groupBy[0];
+        groupFields.find((k) => isDateLike(firstRow[k])) ?? groupFields[0];
     const valueKey = plan.aggregates[0]?.alias ?? findNumericKey(firstRow);
 
     if (dateKey === undefined || valueKey === undefined) {

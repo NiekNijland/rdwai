@@ -6,6 +6,9 @@ export type AggregateClause = {
 };
 export type OrderClause = { expr: string; direction: 'asc' | 'desc' };
 
+export type Bucket = 'none' | 'year' | 'month' | 'day';
+export type GroupKey = { field: string; bucket: Bucket };
+
 export type DisplayHint =
     | 'count'
     | 'stats'
@@ -22,7 +25,7 @@ export type Rating = 'up' | 'down';
 export type Plan = {
     where: WhereClause[];
     select: string[];
-    groupBy: string[];
+    groupBy: GroupKey[];
     aggregates: AggregateClause[];
     orderBy: OrderClause[];
     limit: number | null;

@@ -13,9 +13,7 @@ use NiekNijland\RDW\Schema\SchemaRegistry;
 
 final readonly class PromptBuilder
 {
-    public function __construct(private SchemaRegistry $schemas)
-    {
-    }
+    public function __construct(private SchemaRegistry $schemas) {}
 
     public function systemPrompt(Locale $locale): string
     {
@@ -73,7 +71,7 @@ Pick the *least busy* hint that still answers the question. When in doubt betwee
 - `stacked_bars` — a two-dimensional breakdown ("X by Y per Z", "fuel type per year"). Exactly two `groupBy` keys + one count aggregate. The *first* key is the outer category (x-axis), the *second* is the stack. Sort `n desc`, `limit` 100.
 - `pie` — share-of-total when the breakdown has ≤ 6 categories ("what share of X is Y?"). Same shape as `bars`. Use this only when the user clearly asks about share or proportions, or when you expect ≤ 6 groups (e.g. fuel type, body type).
 - `histogram` — distribution of a single value across ordered buckets ("how is X distributed", "ages of Y"). Same shape as `bars` but the `groupBy` field is a year/numeric/ordered field and the natural reading order is by the bucket, not by frequency. Sort by the bucket field ascending. Pick this *only* when the buckets have a natural order; otherwise use `bars`.
-- `timeseries` — a value over time ("X per year", "registrations per month over 2020-2024"). One date `groupBy` field + one count aggregate, sort the date ascending. Use this when the x-axis is a date/year.
+- `timeseries` — a value over time ("X per year", "X per month", "registrations per month over 2020-2024"). `groupBy` MUST be exactly one date field; never include `LicensePlate` or any other non-date column, otherwise `count(*)` collapses to 1 per row and the chart becomes a flat line at y=1. The dataset stores dates at day precision, so set the bucket to match the question: `year` for "per year", `month` for "per month", `day` for "per day". Sort the date ascending. Pick `limit` so it covers the requested range (~50 for yearly, ~60 for monthly windows, up to 400 for daily).
 - `table` — a list of rows ("show me 10 …"). `select` with a few fields, no aggregates.
 - `record` — a single vehicle (e.g. license-plate lookup). `select` empty (the frontend renders every available field), `where` includes a unique key.
 
@@ -81,9 +79,31 @@ Pick the *least busy* hint that still answers the question. When in doubt betwee
 
 When the plan has any aggregate, every field you want in the output must go in `groupBy`. Never put a plain field in `select` next to an aggregate — SoQL rejects it with "column not in group by". `select` is only for non-aggregated row queries.
 
+# Group keys & date buckets
+
+Every `groupBy` entry is a `{field, bucket}` pair. `bucket` controls how a date field is coarsened before grouping:
+
+- `none` — group by the raw stored value. Always use this for non-date fields (brand, color, fuel type, mass, …) and for date fields only when the user wants daily granularity.
+- `year` / `month` / `day` — bucket a date field via SoQL `date_trunc_y` / `date_trunc_ym` / `date_trunc_ymd`. Use these for "per year" / "per month" / "per day" questions; without a bucket those produce one row per *day*, which is almost never what the user asked.
+
+`bucket` is only meaningful on date fields. Set it to `none` on every other field.
+
+In the example notation below, `groupBy: FirstAdmissionDate (year)` means `{field: FirstAdmissionDate, bucket: year}`; a bare `groupBy: PrimaryColor` means `{field: PrimaryColor, bucket: none}`.
+
 # Dates
 
 Date fields end in `*Date`. Pass `YYYY-MM-DD` strings. For "in 2017" emit two clauses: `gte 2017-01-01` AND `lt 2018-01-01`. For "in February 2017": `gte 2017-02-01` AND `lt 2017-03-01`.
+
+## Choosing the right date field
+
+Several date fields have similar Dutch names; pick deliberately based on the verb in the question:
+
+- `RegistrationDate` (`datum_tenaamstelling_dt`) — date of the **current** tenaamstelling. Use this for "tenaamstelling", "tenaamgesteld", "overschrijving", "overgeschreven", and any other "transferred / re-registered to a new owner" wording. This is what "per maand/jaar" questions about ownership transfers almost always want.
+- `FirstNetherlandsRegistrationDate` (`datum_eerste_tenaamstelling_in_nederland_dt`) — the **first time ever** the vehicle was registered in the Netherlands. Only use this when the user explicitly says "eerste tenaamstelling in Nederland", "voor het eerst in Nederland geregistreerd", or "geïmporteerd in jaar X". Not the same as a transfer.
+- `FirstAdmissionDate` (`datum_eerste_toelating_dt`) — first admission of the vehicle anywhere (often abroad, before NL import). Use for "eerste toelating" or year-of-manufacture-style questions when no Dutch-import phrasing is present.
+- `ApkExpiryDate`, `TachographExpiryDate`, `BpmDepreciationApprovalDate` — only when the user explicitly asks about that specific validity/approval moment.
+
+When the user says "overgeschreven" or just "tenaamstelling" without the "eerste in Nederland" qualifier, choose `RegistrationDate`, never `FirstNetherlandsRegistrationDate`.
 
 # License plates
 
@@ -141,13 +161,31 @@ Plan:
   limit: 1
   display: record
 
-User: How many {$brandA}s were first admitted each year since 2015?
+User: How many {$brandA}s were first admitted each year since 2000?
 Plan:
-  where: Brand eq {$brandA}, FirstAdmissionDate gte 2015-01-01
-  groupBy: FirstAdmissionDate
+  where: Brand eq {$brandA}, FirstAdmissionDate gte 2000-01-01
+  groupBy: FirstAdmissionDate (year)
   aggregates: count(*) as n
   orderBy: FirstAdmissionDate asc
-  limit: 120
+  limit: 50
+  display: timeseries
+
+User: How many {$brandA}s were first admitted each month in 2023?
+Plan:
+  where: Brand eq {$brandA}, FirstAdmissionDate gte 2023-01-01, FirstAdmissionDate lt 2024-01-01
+  groupBy: FirstAdmissionDate (month)
+  aggregates: count(*) as n
+  orderBy: FirstAdmissionDate asc
+  limit: 12
+  display: timeseries
+
+User: How many {$brandA} {$modelA}s were transferred per month in 2025?
+Plan:
+  where: Brand eq {$brandA}, CommercialName contains {$modelA}, RegistrationDate gte 2025-01-01, RegistrationDate lt 2026-01-01
+  groupBy: RegistrationDate (month)
+  aggregates: count(*) as n
+  orderBy: RegistrationDate asc
+  limit: 12
   display: timeseries
 
 User: What's the share of fuel types for {$brandA}?
@@ -171,7 +209,7 @@ Plan:
 User: {$brandA} registrations per year, broken down by primary color.
 Plan:
   where: Brand eq {$brandA}, FirstAdmissionDate gte 2010-01-01
-  groupBy: FirstAdmissionDate, PrimaryColor
+  groupBy: FirstAdmissionDate (year), PrimaryColor
   aggregates: count(*) as n
   orderBy: FirstAdmissionDate asc
   limit: 200

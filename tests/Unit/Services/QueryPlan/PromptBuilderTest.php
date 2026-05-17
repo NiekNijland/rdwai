@@ -41,6 +41,24 @@ final class PromptBuilderTest extends TestCase
         self::assertStringNotContainsString('display: stackedBars', $prompt);
     }
 
+    public function test_prompt_disambiguates_the_lookalike_date_fields(): void
+    {
+        $prompt = $this->builder()->systemPrompt(Locale::English);
+
+        self::assertStringContainsString('RegistrationDate', $prompt);
+        self::assertStringContainsString('overgeschreven', $prompt);
+        self::assertStringContainsString('FirstNetherlandsRegistrationDate', $prompt);
+        self::assertStringContainsString('FirstAdmissionDate', $prompt);
+    }
+
+    public function test_prompt_forbids_license_plate_in_timeseries_group_by(): void
+    {
+        $prompt = $this->builder()->systemPrompt(Locale::English);
+
+        self::assertStringContainsString('LicensePlate', $prompt);
+        self::assertStringContainsString('flat line', $prompt);
+    }
+
     public function test_prompt_picks_explanation_language_from_locale(): void
     {
         $builder = $this->builder();

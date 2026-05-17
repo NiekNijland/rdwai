@@ -5,18 +5,22 @@ declare(strict_types=1);
 namespace Tests\Unit\Services\QueryPlan;
 
 use App\Services\QueryPlan\AggregateFn;
+use App\Services\QueryPlan\Bucket;
 use App\Services\QueryPlan\DisplayHint;
+use App\Services\QueryPlan\GroupKey;
 use App\Services\QueryPlan\OrderDirection;
+use App\Services\QueryPlan\Plan;
 use App\Services\QueryPlan\PlanFactory;
 use App\Services\QueryPlan\WhereOp;
 use InvalidArgumentException;
+use NiekNijland\RDW\Schema\SchemaRegistry;
 use PHPUnit\Framework\TestCase;
 
 final class PlanFactoryTest extends TestCase
 {
     public function test_builds_a_complete_plan_from_a_well_formed_array(): void
     {
-        $factory = new PlanFactory();
+        $factory = $this->factory();
 
         $plan = $factory->fromArray([
             'where' => [
@@ -24,7 +28,7 @@ final class PlanFactoryTest extends TestCase
                 ['field' => 'PrimaryColor', 'op' => 'contains', 'value' => 'wit'],
             ],
             'select' => [],
-            'groupBy' => ['PrimaryColor'],
+            'groupBy' => [['field' => 'PrimaryColor', 'bucket' => 'none']],
             'aggregates' => [
                 ['fn' => 'count', 'field' => '*', 'alias' => 'n'],
             ],
@@ -43,7 +47,7 @@ final class PlanFactoryTest extends TestCase
         self::assertSame(WhereOp::Contains, $plan->where[1]->op);
 
         self::assertSame([], $plan->select);
-        self::assertSame(['PrimaryColor'], $plan->groupBy);
+        self::assertEquals([new GroupKey('PrimaryColor', Bucket::None)], $plan->groupBy);
 
         self::assertCount(1, $plan->aggregates);
         self::assertSame(AggregateFn::Count, $plan->aggregates[0]->fn);
@@ -61,7 +65,7 @@ final class PlanFactoryTest extends TestCase
 
     public function test_drops_spurious_select_fields_for_count_display(): void
     {
-        $factory = new PlanFactory();
+        $factory = $this->factory();
 
         $plan = $factory->fromArray([
             'select' => ['LicensePlate'],
@@ -75,7 +79,7 @@ final class PlanFactoryTest extends TestCase
 
     public function test_promotes_select_into_group_by_when_aggregates_are_present(): void
     {
-        $factory = new PlanFactory();
+        $factory = $this->factory();
 
         $plan = $factory->fromArray([
             'select' => ['CommercialName'],
@@ -87,27 +91,120 @@ final class PlanFactoryTest extends TestCase
         ]);
 
         self::assertSame([], $plan->select);
-        self::assertSame(['CommercialName'], $plan->groupBy);
+        self::assertEquals([new GroupKey('CommercialName', Bucket::None)], $plan->groupBy);
     }
 
     public function test_merges_select_into_existing_group_by_without_duplicates(): void
     {
-        $factory = new PlanFactory();
+        $factory = $this->factory();
 
         $plan = $factory->fromArray([
             'select' => ['PrimaryColor', 'CommercialName'],
-            'groupBy' => ['PrimaryColor'],
+            'groupBy' => [['field' => 'PrimaryColor', 'bucket' => 'none']],
             'aggregates' => [['fn' => 'count', 'field' => '*', 'alias' => 'n']],
             'display' => 'bars',
         ]);
 
         self::assertSame([], $plan->select);
-        self::assertSame(['PrimaryColor', 'CommercialName'], $plan->groupBy);
+        self::assertEquals(
+            [
+                new GroupKey('PrimaryColor', Bucket::None),
+                new GroupKey('CommercialName', Bucket::None),
+            ],
+            $plan->groupBy,
+        );
+    }
+
+    public function test_promotes_date_select_into_groupby_with_month_bucket_for_timeseries(): void
+    {
+        // The LLM occasionally puts the date field in `select` instead of
+        // `groupBy` for "per month/year" questions. After promotion the field
+        // would otherwise land at Bucket::None and produce a per-day flatline;
+        // a Month default keeps the chart useful while still surfacing the
+        // mistake in logs.
+        $factory = $this->factory();
+
+        $plan = $factory->fromArray([
+            'select' => ['RegistrationDate'],
+            'groupBy' => [],
+            'aggregates' => [['fn' => 'count', 'field' => '*', 'alias' => 'n']],
+            'orderBy' => [['expr' => 'RegistrationDate', 'direction' => 'asc']],
+            'limit' => 60,
+            'display' => 'timeseries',
+        ]);
+
+        self::assertEquals([new GroupKey('RegistrationDate', Bucket::Month)], $plan->groupBy);
+    }
+
+    public function test_promotion_keeps_bucket_none_for_non_date_fields_or_non_timeseries(): void
+    {
+        $factory = $this->factory();
+
+        $bars = $factory->fromArray([
+            'select' => ['CommercialName'],
+            'aggregates' => [['fn' => 'count', 'field' => '*', 'alias' => 'n']],
+            'display' => 'bars',
+        ]);
+        self::assertEquals([new GroupKey('CommercialName', Bucket::None)], $bars->groupBy);
+
+        // Non-date field promoted under timeseries — bucket stays None, then
+        // the timeseries scrubber rejects the whole plan because no date
+        // field survives. We assert the upstream behaviour by widening to a
+        // mixed plan that keeps the date untouched and the non-date dropped.
+        $timeseries = $factory->fromArray([
+            'select' => ['PrimaryColor'],
+            'groupBy' => [['field' => 'RegistrationDate', 'bucket' => 'month']],
+            'aggregates' => [['fn' => 'count', 'field' => '*', 'alias' => 'n']],
+            'display' => 'timeseries',
+        ]);
+        self::assertEquals(
+            [new GroupKey('RegistrationDate', Bucket::Month)],
+            $timeseries->groupBy,
+        );
+    }
+
+    public function test_deduplicates_group_by_when_the_same_field_appears_twice(): void
+    {
+        $factory = $this->factory();
+
+        $plan = $factory->fromArray([
+            'groupBy' => [
+                ['field' => 'FirstAdmissionDate', 'bucket' => 'year'],
+                ['field' => 'FirstAdmissionDate', 'bucket' => 'month'],
+            ],
+            'aggregates' => [['fn' => 'count', 'field' => '*', 'alias' => 'n']],
+            'display' => 'timeseries',
+        ]);
+
+        // First occurrence wins so a single $group expression survives —
+        // anything else would emit a duplicated date_trunc_* in the SoQL.
+        self::assertEquals([new GroupKey('FirstAdmissionDate', Bucket::Year)], $plan->groupBy);
+    }
+
+    public function test_preserves_existing_bucket_when_select_fields_merge_in(): void
+    {
+        $factory = $this->factory();
+
+        $plan = $factory->fromArray([
+            'select' => ['FirstAdmissionDate', 'PrimaryColor'],
+            'groupBy' => [['field' => 'FirstAdmissionDate', 'bucket' => 'year']],
+            'aggregates' => [['fn' => 'count', 'field' => '*', 'alias' => 'n']],
+            'display' => 'stacked_bars',
+        ]);
+
+        self::assertSame([], $plan->select);
+        self::assertEquals(
+            [
+                new GroupKey('FirstAdmissionDate', Bucket::Year),
+                new GroupKey('PrimaryColor', Bucket::None),
+            ],
+            $plan->groupBy,
+        );
     }
 
     public function test_preserves_select_when_no_aggregates_are_present(): void
     {
-        $factory = new PlanFactory();
+        $factory = $this->factory();
 
         $plan = $factory->fromArray([
             'select' => ['LicensePlate', 'CommercialName'],
@@ -121,9 +218,112 @@ final class PlanFactoryTest extends TestCase
         self::assertSame([], $plan->groupBy);
     }
 
+    public function test_drops_non_date_fields_from_timeseries_group_by(): void
+    {
+        $factory = $this->factory();
+
+        $plan = $factory->fromArray([
+            'where' => [
+                ['field' => 'Brand', 'op' => 'eq', 'value' => 'VOLKSWAGEN'],
+                ['field' => 'CommercialName', 'op' => 'contains', 'value' => 'UP'],
+                ['field' => 'RegistrationDate', 'op' => 'gte', 'value' => '2025-01-01'],
+                ['field' => 'RegistrationDate', 'op' => 'lt', 'value' => '2026-01-01'],
+            ],
+            'groupBy' => [
+                ['field' => 'RegistrationDate', 'bucket' => 'month'],
+                ['field' => 'LicensePlate', 'bucket' => 'none'],
+            ],
+            'aggregates' => [['fn' => 'count', 'field' => '*', 'alias' => 'n']],
+            'orderBy' => [['expr' => 'RegistrationDate', 'direction' => 'asc']],
+            'limit' => 400,
+            'display' => 'timeseries',
+        ]);
+
+        self::assertEquals([new GroupKey('RegistrationDate', Bucket::Month)], $plan->groupBy);
+    }
+
+    public function test_keeps_date_group_by_on_timeseries_untouched(): void
+    {
+        $factory = $this->factory();
+
+        $plan = $factory->fromArray([
+            'groupBy' => [['field' => 'RegistrationDate', 'bucket' => 'month']],
+            'aggregates' => [['fn' => 'count', 'field' => '*', 'alias' => 'n']],
+            'display' => 'timeseries',
+        ]);
+
+        self::assertEquals([new GroupKey('RegistrationDate', Bucket::Month)], $plan->groupBy);
+    }
+
+    public function test_throws_when_timeseries_group_by_has_no_date_field(): void
+    {
+        $factory = $this->factory();
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('A timeseries plan must group by at least one date field');
+
+        $factory->fromArray([
+            'groupBy' => [
+                ['field' => 'LicensePlate', 'bucket' => 'none'],
+                ['field' => 'PrimaryColor', 'bucket' => 'none'],
+            ],
+            'aggregates' => [['fn' => 'count', 'field' => '*', 'alias' => 'n']],
+            'display' => 'timeseries',
+        ]);
+    }
+
+    public function test_preserves_non_date_group_by_for_non_timeseries_display(): void
+    {
+        $factory = $this->factory();
+
+        $plan = $factory->fromArray([
+            'groupBy' => [
+                ['field' => 'PrimaryColor', 'bucket' => 'none'],
+                ['field' => 'CommercialName', 'bucket' => 'none'],
+            ],
+            'aggregates' => [['fn' => 'count', 'field' => '*', 'alias' => 'n']],
+            'display' => 'stacked_bars',
+        ]);
+
+        self::assertEquals(
+            [
+                new GroupKey('PrimaryColor', Bucket::None),
+                new GroupKey('CommercialName', Bucket::None),
+            ],
+            $plan->groupBy,
+        );
+    }
+
+    public function test_clears_bucket_on_non_date_group_by_field(): void
+    {
+        $factory = $this->factory();
+
+        $plan = $factory->fromArray([
+            'groupBy' => [['field' => 'PrimaryColor', 'bucket' => 'month']],
+            'aggregates' => [['fn' => 'count', 'field' => '*', 'alias' => 'n']],
+            'display' => 'bars',
+        ]);
+
+        self::assertEquals([new GroupKey('PrimaryColor', Bucket::None)], $plan->groupBy);
+    }
+
+    public function test_rejects_bare_string_group_by_items(): void
+    {
+        $factory = $this->factory();
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('groupBy items must be {field, bucket} objects.');
+
+        $factory->fromArray([
+            'groupBy' => ['PrimaryColor'],
+            'aggregates' => [['fn' => 'count', 'field' => '*', 'alias' => 'n']],
+            'display' => 'bars',
+        ]);
+    }
+
     public function test_clamps_limit_to_the_supported_range(): void
     {
-        $factory = new PlanFactory();
+        $factory = $this->factory();
 
         self::assertSame(1, $this->planWithLimit($factory, 0)->limit);
         self::assertSame(1, $this->planWithLimit($factory, -5)->limit);
@@ -133,7 +333,7 @@ final class PlanFactoryTest extends TestCase
 
     public function test_treats_empty_or_star_aggregate_field_as_null(): void
     {
-        $factory = new PlanFactory();
+        $factory = $this->factory();
 
         $planEmpty = $factory->fromArray([
             'aggregates' => [['fn' => 'count', 'field' => '', 'alias' => 'n']],
@@ -150,7 +350,7 @@ final class PlanFactoryTest extends TestCase
 
     public function test_rejects_unknown_field_names(): void
     {
-        $factory = new PlanFactory();
+        $factory = $this->factory();
 
         $this->expectException(InvalidArgumentException::class);
         $this->expectExceptionMessage('Unknown RegisteredVehicleField "NotAField"');
@@ -162,7 +362,7 @@ final class PlanFactoryTest extends TestCase
 
     public function test_rejects_unknown_enum_values_with_typed_exception(): void
     {
-        $factory = new PlanFactory();
+        $factory = $this->factory();
 
         $this->expectException(InvalidArgumentException::class);
         $this->expectExceptionMessage('Invalid value "like" for where.op');
@@ -174,7 +374,7 @@ final class PlanFactoryTest extends TestCase
 
     public function test_rejects_unknown_display_hint(): void
     {
-        $factory = new PlanFactory();
+        $factory = $this->factory();
 
         $this->expectException(InvalidArgumentException::class);
         $this->expectExceptionMessage('Invalid value "treemap" for display');
@@ -182,9 +382,23 @@ final class PlanFactoryTest extends TestCase
         $factory->fromArray(['display' => 'treemap']);
     }
 
+    public function test_rejects_unknown_bucket_value(): void
+    {
+        $factory = $this->factory();
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('Invalid value "decade" for groupBy.bucket');
+
+        $factory->fromArray([
+            'groupBy' => [['field' => 'FirstAdmissionDate', 'bucket' => 'decade']],
+            'aggregates' => [['fn' => 'count', 'field' => '*', 'alias' => 'n']],
+            'display' => 'timeseries',
+        ]);
+    }
+
     public function test_accepts_each_supported_display_hint(): void
     {
-        $factory = new PlanFactory();
+        $factory = $this->factory();
 
         foreach (DisplayHint::cases() as $hint) {
             $plan = $factory->fromArray(['display' => $hint->value]);
@@ -194,7 +408,7 @@ final class PlanFactoryTest extends TestCase
 
     public function test_rejects_invalid_aggregate_alias_instead_of_silently_rewriting(): void
     {
-        $factory = new PlanFactory();
+        $factory = $this->factory();
 
         $this->expectException(InvalidArgumentException::class);
         $this->expectExceptionMessage('Invalid aggregate alias "count(*)"');
@@ -209,7 +423,7 @@ final class PlanFactoryTest extends TestCase
 
     public function test_tolerates_missing_keys_with_safe_defaults(): void
     {
-        $factory = new PlanFactory();
+        $factory = $this->factory();
 
         $plan = $factory->fromArray([]);
 
@@ -225,7 +439,7 @@ final class PlanFactoryTest extends TestCase
 
     public function test_ignores_non_array_collection_payloads(): void
     {
-        $factory = new PlanFactory();
+        $factory = $this->factory();
 
         $plan = $factory->fromArray([
             'where' => 'not-an-array',
@@ -236,7 +450,12 @@ final class PlanFactoryTest extends TestCase
         self::assertSame([], $plan->select);
     }
 
-    private function planWithLimit(PlanFactory $factory, ?int $limit): \App\Services\QueryPlan\Plan
+    private function factory(): PlanFactory
+    {
+        return new PlanFactory(new SchemaRegistry);
+    }
+
+    private function planWithLimit(PlanFactory $factory, ?int $limit): Plan
     {
         return $factory->fromArray([
             'limit' => $limit,

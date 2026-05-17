@@ -70,13 +70,27 @@ final class PlanSchema
             requiredFields: ['expr', 'direction'],
         );
 
+        $groupItem = new ObjectSchema(
+            name: 'group_key',
+            description: 'A single groupBy key. Set bucket=year/month/day on a date field to bucket the values; bucket=none otherwise.',
+            properties: [
+                $fieldEnum,
+                new EnumSchema(
+                    name: 'bucket',
+                    description: 'Date truncation granularity. Use year/month/day only on date fields; use none for every other field.',
+                    options: array_map(static fn (Bucket $b): string => $b->value, Bucket::cases()),
+                ),
+            ],
+            requiredFields: ['field', 'bucket'],
+        );
+
         return new ObjectSchema(
             name: 'query_plan',
             description: 'Structured plan that translates a natural-language question into an RDW dataset query.',
             properties: [
                 new ArraySchema('where', 'List of filters. Combined with AND.', $whereItem),
                 new ArraySchema('select', 'Columns to return when listing rows. Leave empty for count-only or fully-aggregated queries.', new StringSchema('field', 'Field name (PascalCase).')),
-                new ArraySchema('groupBy', 'Group by these fields. Combine with aggregates.', new StringSchema('field', 'Field name (PascalCase).')),
+                new ArraySchema('groupBy', 'Group by these keys. Each key is a field plus a bucket (none for raw value; year/month/day to truncate a date field).', $groupItem),
                 new ArraySchema('aggregates', 'Aggregates to compute. Required if groupBy is non-empty, or for count-only questions.', $aggregateItem),
                 new ArraySchema('orderBy', 'Ordering applied after grouping. Reference field names or aggregate aliases.', $orderItem),
                 new NumberSchema('limit', 'Maximum rows to return. 1-1000.'),

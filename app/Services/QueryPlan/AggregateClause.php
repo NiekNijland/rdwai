@@ -10,6 +10,5 @@ final readonly class AggregateClause
         public AggregateFn $fn,
         public ?string $field,
         public string $alias,
-    ) {
-    }
+    ) {}
 }

@@ -165,7 +165,7 @@ final class QueryController extends Controller
             'slug' => $run->slug,
             'prompt' => $run->prompt,
             'locale' => $run->locale,
-            'plan' => $run->plan,
+            'plan' => PlanPresenter::normalisePersisted($run->plan),
             'soql' => $run->soql,
             'url' => $run->url,
             'rows' => $run->rows,

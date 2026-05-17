@@ -13,6 +13,7 @@ use NiekNijland\RDW\Fields\RegisteredVehicleField;
 use NiekNijland\RDW\Query\QueryBuilder;
 use NiekNijland\RDW\Query\SortDirection;
 use NiekNijland\RDW\Rdw;
+use NiekNijland\RDW\Records\RegisteredVehicle;
 use NiekNijland\RDW\Schema\CastType;
 use NiekNijland\RDW\Schema\DatasetSchema;
 use Throwable;
@@ -29,24 +30,31 @@ use Throwable;
  * ({@see QueryBuilder::getProjection()}, which returns rows keyed by the
  * Dutch snake_case rdwKey). Aggregate aliases are passed through verbatim so
  * orderBy/expr references remain valid client-side.
+ *
+ * Bucketed group keys ({@see GroupKey} with a non-`None` {@see Bucket}) wrap
+ * the field's rdwKey in a `date_trunc_y` / `date_trunc_ym` / `date_trunc_ymd`
+ * expression, aliased back to the field's PascalCase enum name so the row
+ * projection looks identical to the non-bucketed groupBy path. The expression
+ * is added to `$group` via {@see QueryBuilder::groupByRaw()} and to `$select`
+ * via {@see QueryBuilder::selectRaw()}; `$group` is built in plan order so the
+ * SoQL the user sees in the debug pane matches the plan they see in the UI.
  */
 final readonly class PlanRunner
 {
-    public function __construct(private Rdw $rdw)
-    {
-    }
+    public function __construct(private Rdw $rdw) {}
 
     /**
      * @return array{rows: list<array<string, mixed>>, soql: array<string, string>, url: string}
      */
     public function run(Plan $plan): array
     {
+        $buckets = $this->buildBucketsByField($plan->groupBy);
+
         $builder = $this->rdw->registeredVehicles();
         $builder = $this->applyWhere($builder, $plan->where);
-        $builder = $this->applySelect($builder, [...$plan->select, ...$plan->groupBy]);
-        $builder = $this->applyGroupBy($builder, $plan->groupBy);
+        $builder = $this->applySelectAndGroupBy($builder, $plan, $buckets);
         $builder = $this->applyAggregates($builder, $plan->aggregates);
-        $builder = $this->applyOrderBy($builder, $plan->orderBy, $plan->aggregates);
+        $builder = $this->applyOrderBy($builder, $plan->orderBy, $plan->aggregates, $buckets);
 
         if ($plan->limit !== null) {
             $builder = $builder->limit($plan->limit);
@@ -56,7 +64,7 @@ final readonly class PlanRunner
         $url = $this->buildRequestUrl($soql);
 
         try {
-            $rows = $this->execute($builder, $plan);
+            $rows = $this->execute($builder, $plan, $buckets);
         } catch (RateLimitException $e) {
             // The controller treats RateLimitException specially (429 with a
             // Retry-After). Pass it through; do not wrap.
@@ -69,7 +77,7 @@ final readonly class PlanRunner
     }
 
     /**
-     * @param array<string, string> $soql
+     * @param  array<string, string>  $soql
      */
     private function buildRequestUrl(array $soql): string
     {
@@ -77,13 +85,13 @@ final readonly class PlanRunner
         $datasetId = DatasetId::RegisteredVehicles->value;
         $query = http_build_query($soql, '', '&', PHP_QUERY_RFC3986);
 
-        return "{$base}/resource/{$datasetId}.json" . ($query !== '' ? "?{$query}" : '');
+        return "{$base}/resource/{$datasetId}.json".($query !== '' ? "?{$query}" : '');
     }
 
     /**
-     * @param QueryBuilder<\NiekNijland\RDW\Records\RegisteredVehicle> $builder
-     * @param list<WhereClause> $clauses
-     * @return QueryBuilder<\NiekNijland\RDW\Records\RegisteredVehicle>
+     * @param  QueryBuilder<RegisteredVehicle>  $builder
+     * @param  list<WhereClause>  $clauses
+     * @return QueryBuilder<RegisteredVehicle>
      */
     private function applyWhere(QueryBuilder $builder, array $clauses): QueryBuilder
     {
@@ -106,37 +114,43 @@ final readonly class PlanRunner
     }
 
     /**
-     * @param QueryBuilder<\NiekNijland\RDW\Records\RegisteredVehicle> $builder
-     * @param list<string> $fields
-     * @return QueryBuilder<\NiekNijland\RDW\Records\RegisteredVehicle>
+     * Applies `$plan->select` and `$plan->groupBy` to the builder in a single
+     * ordered pass so the resulting SoQL `$select` and `$group` clauses appear
+     * in the same order the plan does. Bucketed keys go through
+     * {@see QueryBuilder::selectRaw()} / {@see QueryBuilder::groupByRaw()};
+     * plain keys go through the typed `select()` / `groupBy()`.
+     *
+     * @param  QueryBuilder<RegisteredVehicle>  $builder
+     * @param  array<string, BucketExpression>  $buckets  keyed by field enum case
+     * @return QueryBuilder<RegisteredVehicle>
      */
-    private function applySelect(QueryBuilder $builder, array $fields): QueryBuilder
+    private function applySelectAndGroupBy(QueryBuilder $builder, Plan $plan, array $buckets): QueryBuilder
     {
-        foreach ($fields as $name) {
+        foreach ($plan->select as $name) {
             $builder = $builder->select($this->resolveField($name));
         }
 
-        return $builder;
-    }
+        foreach ($plan->groupBy as $key) {
+            $bucket = $buckets[$key->field] ?? null;
+            if ($bucket !== null) {
+                $builder = $builder
+                    ->selectRaw($bucket->expression, $bucket->alias)
+                    ->groupByRaw($bucket->expression);
 
-    /**
-     * @param QueryBuilder<\NiekNijland\RDW\Records\RegisteredVehicle> $builder
-     * @param list<string> $fields
-     * @return QueryBuilder<\NiekNijland\RDW\Records\RegisteredVehicle>
-     */
-    private function applyGroupBy(QueryBuilder $builder, array $fields): QueryBuilder
-    {
-        foreach ($fields as $name) {
-            $builder = $builder->groupBy($this->resolveField($name));
+                continue;
+            }
+
+            $field = $this->resolveField($key->field);
+            $builder = $builder->select($field)->groupBy($field);
         }
 
         return $builder;
     }
 
     /**
-     * @param QueryBuilder<\NiekNijland\RDW\Records\RegisteredVehicle> $builder
-     * @param list<AggregateClause> $aggregates
-     * @return QueryBuilder<\NiekNijland\RDW\Records\RegisteredVehicle>
+     * @param  QueryBuilder<RegisteredVehicle>  $builder
+     * @param  list<AggregateClause>  $aggregates
+     * @return QueryBuilder<RegisteredVehicle>
      */
     private function applyAggregates(QueryBuilder $builder, array $aggregates): QueryBuilder
     {
@@ -156,12 +170,13 @@ final readonly class PlanRunner
     }
 
     /**
-     * @param QueryBuilder<\NiekNijland\RDW\Records\RegisteredVehicle> $builder
-     * @param list<OrderClause> $orderBy
-     * @param list<AggregateClause> $aggregates
-     * @return QueryBuilder<\NiekNijland\RDW\Records\RegisteredVehicle>
+     * @param  QueryBuilder<RegisteredVehicle>  $builder
+     * @param  list<OrderClause>  $orderBy
+     * @param  list<AggregateClause>  $aggregates
+     * @param  array<string, BucketExpression>  $buckets  keyed by field enum case
+     * @return QueryBuilder<RegisteredVehicle>
      */
-    private function applyOrderBy(QueryBuilder $builder, array $orderBy, array $aggregates): QueryBuilder
+    private function applyOrderBy(QueryBuilder $builder, array $orderBy, array $aggregates, array $buckets): QueryBuilder
     {
         $aliasSet = [];
         foreach ($aggregates as $agg) {
@@ -171,9 +186,16 @@ final readonly class PlanRunner
         foreach ($orderBy as $clause) {
             $direction = $clause->direction === OrderDirection::Desc ? SortDirection::Desc : SortDirection::Asc;
 
+            if (isset($buckets[$clause->expr])) {
+                $builder = $builder->orderByRaw($buckets[$clause->expr]->expression.' '.$direction->value);
+
+                continue;
+            }
+
             $field = $this->tryResolveField($clause->expr);
             if ($field !== null) {
                 $builder = $builder->orderBy($field, $direction);
+
                 continue;
             }
 
@@ -184,22 +206,21 @@ final readonly class PlanRunner
                 ));
             }
 
-            $builder = $builder->orderByRaw($clause->expr . ' ' . $direction->value);
+            $builder = $builder->orderByRaw($clause->expr.' '.$direction->value);
         }
 
         return $builder;
     }
 
     /**
-     * @param QueryBuilder<\NiekNijland\RDW\Records\RegisteredVehicle> $builder
+     * @param  QueryBuilder<RegisteredVehicle>  $builder
+     * @param  array<string, BucketExpression>  $buckets
      * @return list<array<string, mixed>>
      */
-    private function execute(QueryBuilder $builder, Plan $plan): array
+    private function execute(QueryBuilder $builder, Plan $plan, array $buckets): array
     {
         if ($plan->aggregates !== [] || $plan->groupBy !== []) {
-            $rows = $builder->getProjection();
-
-            return $this->normaliseProjectionRows($rows, $plan->aggregates);
+            return $this->normaliseProjectionRows($builder->getProjection(), $plan->aggregates, $buckets);
         }
 
         $records = $builder->get();
@@ -212,7 +233,7 @@ final readonly class PlanRunner
      * `$plan->select` (PascalCase enum case names). When no select was given
      * we fall through to every property the record exposes.
      *
-     * @param list<string> $select
+     * @param  list<string>  $select
      * @return array<string, mixed>
      */
     private function recordToArray(object $record, array $select): array
@@ -248,30 +269,76 @@ final readonly class PlanRunner
     /**
      * Aggregate/groupBy rows arrive keyed by the Dutch snake_case rdwKey.
      * Rewrite known keys to their public PascalCase enum case so the frontend
-     * never needs its own translation table.
+     * never needs its own translation table. Bucket aliases (which already
+     * match the field's enum case) and aggregate aliases pass through.
      *
-     * @param list<array<string, mixed>> $rows
-     * @param list<AggregateClause> $aggregates
+     * @param  list<array<string, mixed>>  $rows
+     * @param  list<AggregateClause>  $aggregates
+     * @param  array<string, BucketExpression>  $buckets  keyed by field enum case
      * @return list<array<string, mixed>>
      */
-    private function normaliseProjectionRows(array $rows, array $aggregates): array
+    private function normaliseProjectionRows(array $rows, array $aggregates, array $buckets): array
     {
         $schema = $this->schema();
-        $aliasSet = [];
+        $passThrough = [];
         foreach ($aggregates as $agg) {
-            $aliasSet[$agg->alias] = true;
+            $passThrough[$agg->alias] = true;
+        }
+        foreach ($buckets as $bucket) {
+            $passThrough[$bucket->alias] = true;
         }
 
         $out = [];
         foreach ($rows as $row) {
             $normalised = [];
             foreach ($row as $key => $value) {
-                $renamed = isset($aliasSet[$key])
+                $renamed = isset($passThrough[$key])
                     ? $key
                     : ($schema->byRdwKey[$key]->enumCase ?? $key);
                 $normalised[$renamed] = $this->normaliseValue($value);
             }
             $out[] = $normalised;
+        }
+
+        return $out;
+    }
+
+    /**
+     * Translate every bucketed {@see GroupKey} into a SoQL expression bound to
+     * the field's rdwKey, plus an alias matching the field's PascalCase enum
+     * case so the projection row key looks identical to the non-bucket path.
+     * Returns a map keyed by the field's enum case so both the select/group
+     * pass and the orderBy pass can look the bucket up by `$clause->expr`
+     * without rebuilding the index.
+     *
+     * @param  list<GroupKey>  $groupBy
+     * @return array<string, BucketExpression>
+     */
+    private function buildBucketsByField(array $groupBy): array
+    {
+        $schema = $this->schema();
+        $out = [];
+
+        foreach ($groupBy as $key) {
+            if ($key->bucket === Bucket::None) {
+                continue;
+            }
+
+            $descriptor = $schema->byEnumCase[$key->field] ?? null;
+            if ($descriptor === null) {
+                throw new InvalidArgumentException(sprintf('Unknown RegisteredVehicleField "%s".', $key->field));
+            }
+
+            $fn = match ($key->bucket) {
+                Bucket::Year => 'date_trunc_y',
+                Bucket::Month => 'date_trunc_ym',
+                Bucket::Day => 'date_trunc_ymd',
+            };
+
+            $out[$key->field] = new BucketExpression(
+                alias: $key->field,
+                expression: sprintf('%s(%s)', $fn, $descriptor->rdwKey),
+            );
         }
 
         return $out;

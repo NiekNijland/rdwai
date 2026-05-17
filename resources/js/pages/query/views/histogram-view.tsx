@@ -22,7 +22,7 @@ export function HistogramView({
     fallback: React.ReactNode;
 }) {
     const firstRow = rows[0] ?? {};
-    const binKey = plan.groupBy[0] ?? Object.keys(firstRow)[0];
+    const binKey = plan.groupBy[0]?.field ?? Object.keys(firstRow)[0];
     const valueKey = plan.aggregates[0]?.alias ?? findNumericKey(firstRow);
 
     if (binKey === undefined || valueKey === undefined) {

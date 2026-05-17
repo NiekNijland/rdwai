@@ -32,7 +32,7 @@ export function PieView({
     const { t } = useTranslation();
     const firstRow = rows[0] ?? {};
     const groupKey =
-        plan.groupBy[0] ??
+        plan.groupBy[0]?.field ??
         Object.keys(firstRow).find((k) => typeof firstRow[k] === 'string') ??
         Object.keys(firstRow)[0];
     const valueKey = plan.aggregates[0]?.alias ?? findNumericKey(firstRow);
@@ -192,4 +192,3 @@ export function PieView({
         </div>
     );
 }
-

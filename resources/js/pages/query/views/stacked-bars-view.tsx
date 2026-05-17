@@ -32,7 +32,7 @@ export function StackedBarsView({
     fallback: React.ReactNode;
 }) {
     const { t } = useTranslation();
-    const [outerKey, innerKey] = plan.groupBy;
+    const [outerKey, innerKey] = plan.groupBy.map((k) => k.field);
     const valueKey = plan.aggregates[0]?.alias ?? findNumericKey(rows[0] ?? {});
 
     if (

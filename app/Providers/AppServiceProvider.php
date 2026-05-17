@@ -14,6 +14,7 @@ use Illuminate\Support\ServiceProvider;
 use Illuminate\Validation\Rules\Password;
 use NiekNijland\RDW\Http\Configuration as RdwConfiguration;
 use NiekNijland\RDW\Rdw;
+use NiekNijland\RDW\Schema\SchemaRegistry;
 
 class AppServiceProvider extends ServiceProvider
 {
@@ -27,6 +28,11 @@ class AppServiceProvider extends ServiceProvider
             userAgent: 'rdwai/0.1 (laravel)',
             timeoutSeconds: 15.0,
         )));
+
+        // Share the SchemaRegistry the Rdw client uses with the rest of the
+        // app (e.g. PlanFactory) so schema lookups cannot diverge across
+        // collaborators.
+        $this->app->singleton(SchemaRegistry::class, static fn ($app): SchemaRegistry => $app->make(Rdw::class)->schemas());
     }
 
     /**
