@@ -191,6 +191,15 @@ Plan:
   limit: 1
   display: bars
 
+User: Which brand has the most {$colorA} cars?
+Plan:
+  where: PrimaryColor eq {$colorA}
+  groupBy: Brand
+  aggregates: count(*) as n
+  orderBy: n desc
+  limit: 1
+  display: bars
+
 User: In what year were {$brandA} {$modelA}s most popular?
 Plan:
   where: Brand eq {$brandA}, CommercialName contains {$modelA}

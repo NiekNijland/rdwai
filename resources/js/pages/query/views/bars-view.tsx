@@ -52,7 +52,7 @@ export function BarsView({
     const config = {
         value: {
             label: plan.aggregates[0]?.alias ?? 'count',
-            color: 'var(--chart-1)',
+            color: 'var(--rdw-orange, var(--chart-1))',
         },
     } satisfies ChartConfig;
 
@@ -85,7 +85,11 @@ export function BarsView({
                     cursor={false}
                     content={<ChartTooltipContent indicator="line" />}
                 />
-                <Bar dataKey="value" fill="var(--chart-1)" radius={4}>
+                <Bar
+                    dataKey="value"
+                    fill="var(--rdw-orange, var(--chart-1))"
+                    radius={4}
+                >
                     <LabelList
                         dataKey="value"
                         position={labelPosition}
