@@ -4,26 +4,26 @@ declare(strict_types=1);
 
 namespace Tests\Feature\Rdw;
 
+use App\Ai\Agents\QueryPlanAgent;
 use App\Models\QueryRun;
 use App\Models\User;
 use GuzzleHttp\Client as GuzzleClient;
 use GuzzleHttp\Handler\MockHandler;
 use GuzzleHttp\HandlerStack;
 use GuzzleHttp\Psr7\Response as Psr7Response;
+use Laravel\Ai\Responses\Data\Meta;
+use Laravel\Ai\Responses\Data\Usage;
+use Laravel\Ai\Responses\StructuredTextResponse;
 use NiekNijland\RDW\Http\Configuration as RdwConfiguration;
 use NiekNijland\RDW\Http\SocrataClient;
 use NiekNijland\RDW\Rdw;
-use Prism\Prism\Facades\Prism;
-use Prism\Prism\Testing\StructuredResponseFake;
-use Prism\Prism\ValueObjects\Meta;
-use Prism\Prism\ValueObjects\Usage;
 use Tests\TestCase;
 
 final class QueryRunPersistenceTest extends TestCase
 {
     public function test_successful_query_persists_a_query_run_and_returns_its_slug(): void
     {
-        $this->fakePrismWithPlan(
+        $this->fakeQueryPlan(
             [
                 'where' => [['field' => 'Brand', 'op' => 'eq', 'value' => 'VOLKSWAGEN']],
                 'select' => [],
@@ -74,7 +74,7 @@ final class QueryRunPersistenceTest extends TestCase
     {
         $user = User::factory()->createOne();
 
-        $this->fakePrismWithPlan([
+        $this->fakeQueryPlan([
             'where' => [],
             'select' => [],
             'groupBy' => [],
@@ -101,17 +101,16 @@ final class QueryRunPersistenceTest extends TestCase
     /**
      * @param array<string, mixed> $plan
      */
-    private function fakePrismWithPlan(array $plan, ?Usage $usage = null, string $model = 'fake'): void
+    private function fakeQueryPlan(array $plan, ?Usage $usage = null, string $model = 'fake'): void
     {
-        $fake = StructuredResponseFake::make()->withStructured($plan);
-
-        if ($usage !== null) {
-            $fake = $fake->withUsage($usage);
-        }
-
-        $fake = $fake->withMeta(new Meta(id: 'fake', model: $model));
-
-        Prism::fake([$fake]);
+        QueryPlanAgent::fake([
+            new StructuredTextResponse(
+                $plan,
+                json_encode($plan, JSON_THROW_ON_ERROR),
+                $usage ?? new Usage(),
+                new Meta('openai', $model),
+            ),
+        ]);
     }
 
     /**

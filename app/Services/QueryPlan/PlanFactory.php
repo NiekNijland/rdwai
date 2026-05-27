@@ -15,9 +15,9 @@ use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
 
 /**
- * Builds a typed {@see Plan} from the loose array Prism hands back.
+ * Builds a typed {@see Plan} from the loose array the LLM hands back.
  *
- * Prism + OpenAI strict schema validates the shape, but we still re-validate
+ * OpenAI strict structured output validates the shape, but we still re-validate
  * enum values and resolve PascalCase field names to {@see RegisteredVehicleField}
  * cases so the runner can rely on typed inputs. All enum lookups are done with
  * {@see BackedEnum::tryFrom()} so an out-of-band value surfaces as a typed
@@ -313,7 +313,7 @@ final class PlanFactory
     }
 
     /**
-     * Parses the strict `{field, bucket}` shape Prism emits (matching the
+     * Parses the strict `{field, bucket}` shape the model emits (matching the
      * JSON schema in {@see PlanSchema}). A bucket on a non-date field is
      * cleared with a warning rather than rejected — the LLM occasionally
      * picks a bucket for an integer field and the right repair is to drop

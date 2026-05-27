@@ -5,8 +5,8 @@ declare(strict_types=1);
 namespace Tests\Unit\Services\QueryPlan;
 
 use App\Services\QueryPlan\CostEstimator;
+use Laravel\Ai\Responses\Data\Usage;
 use PHPUnit\Framework\TestCase;
-use Prism\Prism\ValueObjects\Usage;
 
 final class CostEstimatorTest extends TestCase
 {
@@ -62,7 +62,6 @@ final class CostEstimatorTest extends TestCase
         $usage = new Usage(
             promptTokens: 1_000_000,
             completionTokens: 0,
-            cacheWriteInputTokens: null,
             cacheReadInputTokens: 500_000,
         );
 
@@ -83,7 +82,6 @@ final class CostEstimatorTest extends TestCase
         $usage = new Usage(
             promptTokens: 1_000_000,
             completionTokens: 0,
-            cacheWriteInputTokens: null,
             cacheReadInputTokens: 500_000,
         );
 
@@ -129,7 +127,7 @@ final class CostEstimatorTest extends TestCase
         $usage = new Usage(
             promptTokens: 1_000_000,
             completionTokens: 0,
-            thoughtTokens: 1_000_000,
+            reasoningTokens: 1_000_000,
         );
 
         // 1M prompt @ 3.00 + 1M thought @ 12.00 = 15.00

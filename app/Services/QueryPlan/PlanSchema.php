@@ -4,106 +4,113 @@ declare(strict_types=1);
 
 namespace App\Services\QueryPlan;
 
+use App\Ai\Agents\QueryPlanAgent;
+use Illuminate\Contracts\JsonSchema\JsonSchema;
+use Illuminate\JsonSchema\Types\Type;
 use NiekNijland\RDW\Datasets\DatasetId;
 use NiekNijland\RDW\Fields\RegisteredVehicleField;
 use NiekNijland\RDW\Schema\CastType;
 use NiekNijland\RDW\Schema\DatasetSchema;
 use NiekNijland\RDW\Schema\FieldDescriptor;
 use NiekNijland\RDW\Schema\SchemaRegistry;
-use Prism\Prism\Schema\ArraySchema;
-use Prism\Prism\Schema\EnumSchema;
-use Prism\Prism\Schema\NumberSchema;
-use Prism\Prism\Schema\ObjectSchema;
-use Prism\Prism\Schema\StringSchema;
 
+/**
+ * Builds the structured-output schema {@see QueryPlanAgent}
+ * exposes to the model, expressed with Laravel's {@see JsonSchema} builder.
+ *
+ * The shape mirrors the typed {@see Plan} that {@see PlanFactory} reconstructs:
+ * every property is marked required so the OpenAI strict-schema mode validates
+ * the overall shape before {@see PlanFactory} re-validates enum values.
+ */
 final class PlanSchema
 {
-    public static function build(): ObjectSchema
+    /**
+     * @return array<string, Type>
+     */
+    public static function build(JsonSchema $schema): array
     {
         $datasetSchema = app(SchemaRegistry::class)->get(DatasetId::RegisteredVehicles);
 
         $fieldNames = array_map(static fn (RegisteredVehicleField $f): string => $f->name, RegisteredVehicleField::cases());
 
-        $fieldEnum = new EnumSchema(
-            name: 'field',
-            description: 'English field name on the RegisteredVehicle dataset (PascalCase, e.g. Brand, CommercialName, PrimaryColor).',
-            options: $fieldNames,
-        );
+        $fieldDescription = 'English field name on the RegisteredVehicle dataset (PascalCase, e.g. Brand, CommercialName, PrimaryColor).';
 
         // Future optimisation: split the value field into a polymorphic schema
         // keyed on `field` so each field gets a discriminated enum of its known
-        // values. Prism doesn't expose a per-property discriminator today and
-        // the marginal win over a vocabulary-rich description is small.
-        $whereItem = new ObjectSchema(
-            name: 'where_clause',
-            description: 'A single where predicate against the RegisteredVehicle dataset.',
-            properties: [
-                $fieldEnum,
-                new EnumSchema('op', 'Comparison operator.', array_map(static fn (WhereOp $o): string => $o->value, WhereOp::cases())),
-                new StringSchema('value', self::valueDescription($datasetSchema)),
-            ],
-            requiredFields: ['field', 'op', 'value'],
-        );
+        // values. The JSON schema builder doesn't expose a per-property
+        // discriminator today and the marginal win over a vocabulary-rich
+        // description is small.
+        $whereItem = $schema->object([
+            'field' => $schema->string()->enum($fieldNames)->description($fieldDescription)->required(),
+            'op' => $schema->string()
+                ->enum(array_map(static fn (WhereOp $o): string => $o->value, WhereOp::cases()))
+                ->description('Comparison operator.')
+                ->required(),
+            'value' => $schema->string()->description(self::valueDescription($datasetSchema))->required(),
+        ]);
 
-        $aggregateItem = new ObjectSchema(
-            name: 'aggregate_clause',
-            description: 'An aggregate function over the grouped result set.',
-            properties: [
-                new EnumSchema('fn', 'Aggregate function.', array_map(static fn (AggregateFn $f): string => $f->value, AggregateFn::cases())),
-                new EnumSchema(
-                    name: 'field',
-                    description: 'Field to aggregate. For count, pass "*" to count rows.',
-                    options: [...$fieldNames, '*'],
-                ),
-                new StringSchema('alias', 'Result alias used in groupBy/orderBy output, e.g. "n", "total". Must match [A-Za-z_][A-Za-z0-9_]*.'),
-            ],
-            requiredFields: ['fn', 'field', 'alias'],
-        );
+        $aggregateItem = $schema->object([
+            'fn' => $schema->string()
+                ->enum(array_map(static fn (AggregateFn $f): string => $f->value, AggregateFn::cases()))
+                ->description('Aggregate function.')
+                ->required(),
+            'field' => $schema->string()
+                ->enum([...$fieldNames, '*'])
+                ->description('Field to aggregate. For count, pass "*" to count rows.')
+                ->required(),
+            'alias' => $schema->string()
+                ->description('Result alias used in groupBy/orderBy output, e.g. "n", "total". Must match [A-Za-z_][A-Za-z0-9_]*.')
+                ->required(),
+        ]);
 
-        $orderItem = new ObjectSchema(
-            name: 'order_clause',
-            description: 'A single order-by expression. expr may be a field name (PascalCase) or an aggregate alias.',
-            properties: [
-                new StringSchema('expr', 'Field name or aggregate alias to sort by.'),
-                new EnumSchema('direction', 'Sort direction.', ['asc', 'desc']),
-            ],
-            requiredFields: ['expr', 'direction'],
-        );
+        $orderItem = $schema->object([
+            'expr' => $schema->string()->description('Field name or aggregate alias to sort by.')->required(),
+            'direction' => $schema->string()->enum(['asc', 'desc'])->description('Sort direction.')->required(),
+        ]);
 
-        $groupItem = new ObjectSchema(
-            name: 'group_key',
-            description: 'A single groupBy key. Set bucket=year/month/day on a date field to bucket the values; bucket=none otherwise.',
-            properties: [
-                $fieldEnum,
-                new EnumSchema(
-                    name: 'bucket',
-                    description: 'Date truncation granularity. Use year/month/day only on date fields; use none for every other field.',
-                    options: array_map(static fn (Bucket $b): string => $b->value, Bucket::cases()),
-                ),
-            ],
-            requiredFields: ['field', 'bucket'],
-        );
+        $groupItem = $schema->object([
+            'field' => $schema->string()->enum($fieldNames)->description($fieldDescription)->required(),
+            'bucket' => $schema->string()
+                ->enum(array_map(static fn (Bucket $b): string => $b->value, Bucket::cases()))
+                ->description('Date truncation granularity. Use year/month/day only on date fields; use none for every other field.')
+                ->required(),
+        ]);
 
-        return new ObjectSchema(
-            name: 'query_plan',
-            description: 'Structured plan that translates a natural-language question into an RDW dataset query.',
-            properties: [
-                new ArraySchema('where', 'List of filters. Combined with AND.', $whereItem),
-                new ArraySchema('select', 'Columns to return when listing rows. Leave empty for count-only or fully-aggregated queries.', new StringSchema('field', 'Field name (PascalCase).')),
-                new ArraySchema('groupBy', 'Group by these keys. Each key is a field plus a bucket (none for raw value; year/month/day to truncate a date field).', $groupItem),
-                new ArraySchema('aggregates', 'Aggregates to compute. Required if groupBy is non-empty, or for count-only questions.', $aggregateItem),
-                new ArraySchema('orderBy', 'Ordering applied after grouping. Reference field names or aggregate aliases.', $orderItem),
-                new NumberSchema('limit', 'Maximum rows to return. 1-1000.'),
-                new EnumSchema('display', 'How to render the answer.', array_map(static fn (DisplayHint $d): string => $d->value, DisplayHint::cases())),
-                new StringSchema('explanation', 'One short sentence summarising what this query answers, written in the language specified by the system prompt.'),
-            ],
-            requiredFields: ['where', 'select', 'groupBy', 'aggregates', 'orderBy', 'limit', 'display', 'explanation'],
-        );
+        return [
+            'where' => $schema->array()
+                ->description('List of filters. Combined with AND.')
+                ->items($whereItem)
+                ->required(),
+            'select' => $schema->array()
+                ->description('Columns to return when listing rows. Leave empty for count-only or fully-aggregated queries.')
+                ->items($schema->string()->description('Field name (PascalCase).'))
+                ->required(),
+            'groupBy' => $schema->array()
+                ->description('Group by these keys. Each key is a field plus a bucket (none for raw value; year/month/day to truncate a date field).')
+                ->items($groupItem)
+                ->required(),
+            'aggregates' => $schema->array()
+                ->description('Aggregates to compute. Required if groupBy is non-empty, or for count-only questions.')
+                ->items($aggregateItem)
+                ->required(),
+            'orderBy' => $schema->array()
+                ->description('Ordering applied after grouping. Reference field names or aggregate aliases.')
+                ->items($orderItem)
+                ->required(),
+            'limit' => $schema->integer()->description('Maximum rows to return. 1-1000.')->required(),
+            'display' => $schema->string()
+                ->enum(array_map(static fn (DisplayHint $d): string => $d->value, DisplayHint::cases()))
+                ->description('How to render the answer.')
+                ->required(),
+            'explanation' => $schema->string()
+                ->description('One short sentence summarising what this query answers, written in the language specified by the system prompt.')
+                ->required(),
+        ];
     }
 
     private static function valueDescription(DatasetSchema $schema): string
     {
-        $lines = ['Comparison value. For Dutch RDW data use UPPERCASE Dutch values. Booleans as "true"/"false". Dates as YYYY-MM-DD.'];
+        $lines = ['Comparison value. String comparisons are case-sensitive and casing differs per field (e.g. "Personenauto" but "GEEL", "TOYOTA") — copy the exact casing listed below. Booleans as "true"/"false". Dates as YYYY-MM-DD.'];
 
         foreach ($schema->fieldsWithVocabulary() as $field) {
             $vocabulary = $field->vocabulary;

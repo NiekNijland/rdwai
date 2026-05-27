@@ -27,3 +27,12 @@ yarn-error.log
 /.nova
 /.vscode
 /.zed
+
+# Laravel Boost — each developer regenerates these locally via `php artisan boost:install`
+/.agents
+/.claude
+/.mcp.json
+/AGENTS.md
+/CLAUDE.md
+/boost.json
+/opencode.json

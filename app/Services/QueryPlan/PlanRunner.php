@@ -45,17 +45,14 @@ final readonly class PlanRunner
     {
     }
 
-    /**
-     * @return array{rows: list<array<string, mixed>>, soql: array<string, string>, url: string}
-     */
-    public function run(Plan $plan): array
+    public function run(Plan $plan): RunnerResult
     {
         // A refusal plan ({@see DisplayHint::Unsupported}) describes "I won't
         // answer this" — there is no SoQL to send and no rows to fetch. Skip
         // the dataset call entirely so an off-topic / injection prompt never
         // bills against the RDW rate limit or surfaces ghost data.
         if ($plan->display === DisplayHint::Unsupported) {
-            return ['rows' => [], 'soql' => [], 'url' => ''];
+            return new RunnerResult(rows: [], soql: [], url: '');
         }
 
         $buckets = $this->buildBucketsByField($plan->groupBy);
@@ -83,7 +80,7 @@ final readonly class PlanRunner
             throw new QueryExecutionException($plan, $soql, $url, $e);
         }
 
-        return ['rows' => $rows, 'soql' => $soql, 'url' => $url];
+        return new RunnerResult(rows: $rows, soql: $soql, url: $url);
     }
 
     /**

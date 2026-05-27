@@ -7,6 +7,8 @@ namespace Tests\Feature\Rdw;
 use App\Actions\Rdw\RunNaturalLanguageQuery;
 use App\Services\QueryPlan\DisplayHint;
 use App\Services\QueryPlan\Plan;
+use App\Services\QueryPlan\QueryResult;
+use App\Services\QueryPlan\TokenUsage;
 use Mockery;
 use Tests\TestCase;
 
@@ -21,8 +23,8 @@ final class QueryRateLimitTest extends TestCase
         // happy-path JSON response and the rate limiter is what gates traffic.
         $mock = Mockery::mock(RunNaturalLanguageQuery::class);
         // @phpstan-ignore method.notFound (Mockery fluent API is not statically resolvable)
-        $mock->shouldReceive('execute')->andReturn([
-            'plan' => new Plan(
+        $mock->shouldReceive('execute')->andReturn(new QueryResult(
+            plan: new Plan(
                 where: [],
                 select: [],
                 groupBy: [],
@@ -32,18 +34,13 @@ final class QueryRateLimitTest extends TestCase
                 display: DisplayHint::Count,
                 explanation: '',
             ),
-            'rows' => [],
-            'soql' => [],
-            'url' => 'https://opendata.rdw.nl/resource/test.json',
-            'model' => 'fake',
-            'tokens' => [
-                'prompt' => 0,
-                'completion' => 0,
-                'cacheRead' => 0,
-                'thought' => 0,
-            ],
-            'estimatedCost' => null,
-        ]);
+            rows: [],
+            soql: [],
+            url: 'https://opendata.rdw.nl/resource/test.json',
+            model: 'fake',
+            tokens: new TokenUsage(prompt: 0, completion: 0, cacheRead: 0, thought: 0),
+            estimatedCost: null,
+        ));
         $this->app->instance(RunNaturalLanguageQuery::class, $mock);
     }
 

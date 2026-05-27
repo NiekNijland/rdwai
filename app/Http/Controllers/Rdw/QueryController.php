@@ -14,6 +14,7 @@ use App\Http\Requests\Rdw\RunQueryRequest;
 use App\Http\Requests\Rdw\SubmitFeedbackRequest;
 use App\Models\QueryRun;
 use App\Services\QueryPlan\PlanPresenter;
+use App\Services\QueryPlan\TokenUsage;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
@@ -102,26 +103,26 @@ final class QueryController extends Controller
         $run = $persist->execute(
             prompt: $prompt,
             locale: app()->getLocale(),
-            plan: $result['plan'],
-            rows: $result['rows'],
-            soql: $result['soql'],
-            url: $result['url'],
+            plan: $result->plan,
+            rows: $result->rows,
+            soql: $result->soql,
+            url: $result->url,
             userId: $user !== null ? (string) $user->getAuthIdentifier() : null,
-            model: $result['model'],
-            tokens: $result['tokens'],
-            estimatedCost: $result['estimatedCost'],
+            model: $result->model,
+            tokens: $result->tokens,
+            estimatedCost: $result->estimatedCost,
         );
 
         return response()->json([
             'slug' => $run->slug,
-            'plan' => PlanPresenter::toArray($result['plan']),
-            'soql' => $result['soql'],
-            'url' => $result['url'],
-            'rows' => $result['rows'],
-            'displayHint' => $result['plan']->display->value,
-            'model' => $result['model'],
-            'tokens' => $result['tokens'],
-            'estimatedCost' => $result['estimatedCost'],
+            'plan' => PlanPresenter::toArray($result->plan),
+            'soql' => $result->soql,
+            'url' => $result->url,
+            'rows' => $result->rows,
+            'displayHint' => $result->plan->display->value,
+            'model' => $result->model,
+            'tokens' => $result->tokens->toArray(),
+            'estimatedCost' => $result->estimatedCost,
         ]);
     }
 
@@ -181,12 +182,7 @@ final class QueryController extends Controller
             // Coalesce nullable model to '' so the TS shape stays non-nullable
             // and the frontend's `Boolean(s)` filter still hides empty values.
             'model' => $run->model ?? '',
-            'tokens' => [
-                'prompt' => $run->prompt_tokens ?? 0,
-                'completion' => $run->completion_tokens ?? 0,
-                'cacheRead' => $run->cache_read_tokens ?? 0,
-                'thought' => $run->thought_tokens ?? 0,
-            ],
+            'tokens' => TokenUsage::fromQueryRun($run)->toArray(),
             'estimatedCost' => $run->estimated_cost,
         ];
     }

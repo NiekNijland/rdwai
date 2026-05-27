@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace App\Services\QueryPlan;
 
-use Prism\Prism\ValueObjects\Usage;
+use Laravel\Ai\Responses\Data\Usage;
 
 /**
  * Estimates USD cost for a single LLM call from token usage and the
@@ -34,7 +34,7 @@ final readonly class CostEstimator
             return null;
         }
 
-        $cacheRead = $usage->cacheReadInputTokens ?? 0;
+        $cacheRead = $usage->cacheReadInputTokens;
         $freshPromptTokens = max(0, $usage->promptTokens - $cacheRead);
 
         $inputRate = (float) ($rates['input'] ?? 0);
@@ -44,10 +44,10 @@ final readonly class CostEstimator
         $cachedRate = isset($rates['cached_input']) ? (float) $rates['cached_input'] : $inputRate;
         $outputRate = (float) ($rates['output'] ?? 0);
 
-        // OpenAI reasoning models bill thought (reasoning) tokens at the output
-        // rate; non-reasoning models report 0 here. Fold them into the output
-        // bucket so adding an `o*` model later doesn't silently undercharge.
-        $outputTokens = $usage->completionTokens + ($usage->thoughtTokens ?? 0);
+        // OpenAI reasoning models bill reasoning tokens at the output rate;
+        // non-reasoning models report 0 here. Fold them into the output bucket
+        // so adding an `o*` model later doesn't silently undercharge.
+        $outputTokens = $usage->completionTokens + $usage->reasoningTokens;
 
         $cost = ($freshPromptTokens * $inputRate)
             + ($cacheRead * $cachedRate)

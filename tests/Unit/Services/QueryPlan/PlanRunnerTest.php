@@ -54,15 +54,15 @@ final class PlanRunnerTest extends TestCase
 
         $result = $runner->run($plan);
 
-        self::assertCount(1, $result['rows']);
+        self::assertCount(1, $result->rows);
         self::assertSame(
             ['CommercialName', 'LicensePlate', 'RegistrationDate'],
-            array_keys($result['rows'][0]),
+            array_keys($result->rows[0]),
         );
-        self::assertSame('GOLF', $result['rows'][0]['CommercialName']);
-        self::assertSame('12-AB-345', $result['rows'][0]['LicensePlate']);
+        self::assertSame('GOLF', $result->rows[0]['CommercialName']);
+        self::assertSame('12-AB-345', $result->rows[0]['LicensePlate']);
         // Dates are normalised to YYYY-MM-DD strings.
-        self::assertSame('2024-01-15', $result['rows'][0]['RegistrationDate']);
+        self::assertSame('2024-01-15', $result->rows[0]['RegistrationDate']);
     }
 
     public function test_aggregate_path_normalises_dutch_keys_to_pascalcase(): void
@@ -85,9 +85,9 @@ final class PlanRunnerTest extends TestCase
 
         $result = $runner->run($plan);
 
-        self::assertSame(['PrimaryColor', 'n'], array_keys($result['rows'][0]));
-        self::assertSame('WIT', $result['rows'][0]['PrimaryColor']);
-        self::assertSame('42', $result['rows'][0]['n']);
+        self::assertSame(['PrimaryColor', 'n'], array_keys($result->rows[0]));
+        self::assertSame('WIT', $result->rows[0]['PrimaryColor']);
+        self::assertSame('42', $result->rows[0]['n']);
     }
 
     public function test_orderby_accepts_field_names_and_aggregate_aliases_but_rejects_others(): void
@@ -156,17 +156,17 @@ final class PlanRunnerTest extends TestCase
 
         $result = $runner->run($plan);
 
-        self::assertArrayHasKey('$group', $result['soql']);
-        self::assertStringContainsString('date_trunc_ym(datum_tenaamstelling_dt)', $result['soql']['$group']);
+        self::assertArrayHasKey('$group', $result->soql);
+        self::assertStringContainsString('date_trunc_ym(datum_tenaamstelling_dt)', $result->soql['$group']);
         self::assertStringContainsString(
             'date_trunc_ym(datum_tenaamstelling_dt) AS RegistrationDate',
-            $result['soql']['$select'],
+            $result->soql['$select'],
         );
         self::assertStringContainsString(
             'date_trunc_ym(datum_tenaamstelling_dt) ASC',
-            $result['soql']['$order'],
+            $result->soql['$order'],
         );
-        self::assertSame(['RegistrationDate', 'n'], array_keys($result['rows'][0]));
+        self::assertSame(['RegistrationDate', 'n'], array_keys($result->rows[0]));
     }
 
     public function test_stacked_bars_mixes_bucketed_and_plain_group_keys_in_plan_order(): void
@@ -197,25 +197,25 @@ final class PlanRunnerTest extends TestCase
         // for the outer-vs-inner axis assignment in stacked_bars.
         self::assertSame(
             'date_trunc_y(datum_eerste_toelating_dt), eerste_kleur',
-            $result['soql']['$group'],
+            $result->soql['$group'],
         );
         self::assertStringContainsString(
             'date_trunc_y(datum_eerste_toelating_dt) AS FirstAdmissionDate',
-            $result['soql']['$select'],
+            $result->soql['$select'],
         );
-        self::assertStringContainsString('eerste_kleur', $result['soql']['$select']);
+        self::assertStringContainsString('eerste_kleur', $result->soql['$select']);
         self::assertStringContainsString(
             'date_trunc_y(datum_eerste_toelating_dt) ASC',
-            $result['soql']['$order'],
+            $result->soql['$order'],
         );
 
         // Bucket alias passes through verbatim; the Dutch rdwKey for the plain
         // group field is renamed to PascalCase.
         self::assertSame(
             ['FirstAdmissionDate', 'PrimaryColor', 'n'],
-            array_keys($result['rows'][0]),
+            array_keys($result->rows[0]),
         );
-        self::assertSame('WIT', $result['rows'][0]['PrimaryColor']);
+        self::assertSame('WIT', $result->rows[0]['PrimaryColor']);
     }
 
     public function test_orderby_by_bucketed_alias_emits_date_trunc_expression(): void
@@ -235,7 +235,7 @@ final class PlanRunnerTest extends TestCase
             explanation: '',
         );
 
-        $soql = $runner->run($plan)['soql'];
+        $soql = $runner->run($plan)->soql;
 
         self::assertStringContainsString(
             'date_trunc_y(datum_eerste_toelating_dt) DESC',
@@ -264,7 +264,7 @@ final class PlanRunnerTest extends TestCase
             explanation: '',
         );
 
-        $soql = $runner->run($plan)['soql'];
+        $soql = $runner->run($plan)->soql;
 
         self::assertArrayHasKey('$where', $soql);
         self::assertStringContainsString('massa_ledig_voertuig IS NOT NULL', $soql['$where']);
@@ -290,7 +290,7 @@ final class PlanRunnerTest extends TestCase
             explanation: '',
         );
 
-        $soql = $runner->run($plan)['soql'];
+        $soql = $runner->run($plan)->soql;
 
         // No orderBy on a plain field → nothing to guard against. The $where
         // param should be absent (no other clauses) rather than carry a
@@ -313,7 +313,7 @@ final class PlanRunnerTest extends TestCase
             explanation: '',
         );
 
-        $soql = $runner->run($plan)['soql'];
+        $soql = $runner->run($plan)->soql;
 
         // Bucketed orderBy goes through orderByRaw against the date_trunc
         // expression — no IS NOT NULL needed (and we'd have to filter the
@@ -339,7 +339,7 @@ final class PlanRunnerTest extends TestCase
             explanation: '',
         );
 
-        $soql = $runner->run($plan)['soql'];
+        $soql = $runner->run($plan)->soql;
 
         self::assertArrayHasKey('$where', $soql);
         self::assertStringContainsString("merk = 'VOLKSWAGEN'", $soql['$where']);
@@ -377,9 +377,9 @@ final class PlanRunnerTest extends TestCase
             explanation: 'Off-topic.',
         ));
 
-        self::assertSame([], $result['rows']);
-        self::assertSame([], $result['soql']);
-        self::assertSame('', $result['url']);
+        self::assertSame([], $result->rows);
+        self::assertSame([], $result->soql);
+        self::assertSame('', $result->url);
     }
 
     /**

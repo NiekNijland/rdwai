@@ -33,6 +33,37 @@ final class PromptBuilderTest extends TestCase
         self::assertStringContainsString('CommercialName contains AYGO', $prompt);
     }
 
+    public function test_prompt_does_not_claim_all_values_are_uppercase(): void
+    {
+        $prompt = $this->builder()->systemPrompt(Locale::English);
+
+        // The old blanket "Values are stored in UPPERCASE Dutch" rule made the
+        // model re-case Title-case kinds like "Personenauto" to "PERSONENAUTO",
+        // which is case-sensitively unequal and matches zero rows.
+        self::assertStringNotContainsString('stored in UPPERCASE', $prompt);
+        self::assertStringNotContainsString('Use UPPERCASE for Dutch values', $prompt);
+    }
+
+    public function test_prompt_warns_that_comparisons_are_case_sensitive_with_mixed_casing(): void
+    {
+        $prompt = $this->builder()->systemPrompt(Locale::English);
+
+        self::assertStringContainsString('case-sensitive', $prompt);
+        // Both casings must appear as concrete anchors: Title-case kind and
+        // UPPERCASE colour/brand.
+        self::assertStringContainsString('Personenauto', $prompt);
+        self::assertStringContainsString('GEEL', $prompt);
+    }
+
+    public function test_prompt_shows_a_mixed_casing_example_query(): void
+    {
+        $prompt = $this->builder()->systemPrompt(Locale::English);
+
+        // The vehicle-kind value stays Title-case in the worked example.
+        self::assertStringContainsString('VehicleType eq Personenauto', $prompt);
+        self::assertStringNotContainsString('VehicleType eq PERSONENAUTO', $prompt);
+    }
+
     public function test_prompt_uses_snake_case_stacked_bars_hint(): void
     {
         $prompt = $this->builder()->systemPrompt(Locale::English);

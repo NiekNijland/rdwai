@@ -47,6 +47,7 @@ final readonly class PromptBuilder
         [$brandA, $brandB, $brandC] = $this->examplePicks($schema, 'Brand', 3);
         [$modelA, $modelB] = $this->examplePicks($schema, 'CommercialName', 2);
         [$colorA, $colorB] = $this->examplePicks($schema, 'PrimaryColor', 2);
+        [$vehicleTypeA] = $this->examplePicks($schema, 'VehicleType', 1);
         $explanationLanguage = match ($locale) {
             Locale::Dutch => 'Dutch',
             Locale::English => 'English',
@@ -79,15 +80,17 @@ Each line is `EnglishName (type): dutch_source_key`. Use the EnglishName in plan
 
 # Value vocabulary
 
-Values are stored in UPPERCASE Dutch. Use these exact strings:
+String comparisons against this dataset are **case-sensitive**, and the stored casing is **not uniform** across fields: vehicle kinds are Title Case (`Personenauto`), while colours and brands are UPPERCASE (`GEEL`, `TOYOTA`). Copy the exact strings listed below — never re-case them. A re-cased value (e.g. `PERSONENAUTO` instead of `Personenauto`) silently matches zero rows.
 
 {$vocabulary}
 
+For any string field **not** listed above, you do not know the stored casing — use `contains` (case-insensitive) instead of `eq`, so a casing guess can't silently return zero rows.
+
 # Operators
 
-- `eq`, `neq`, `gt`, `gte`, `lt`, `lte` — exact comparison. Use UPPERCASE for Dutch values.
-- `contains` — case-insensitive substring search (Socrata `contains()`).
-- `startsWith` — case-sensitive prefix search (Socrata `starts_with()`). Encode the prefix in UPPERCASE.
+- `eq`, `neq`, `gt`, `gte`, `lt`, `lte` — exact, case-sensitive comparison. For string values, copy the casing exactly as shown in the vocabulary above.
+- `contains` — case-insensitive substring search (Socrata `contains()`). Safe when you are unsure of the stored casing.
+- `startsWith` — case-sensitive prefix search (Socrata `starts_with()`). Match the casing of the stored values.
 
 ## Choosing the operator for model names
 
@@ -161,6 +164,12 @@ When the user says "overgeschreven" or just "tenaamstelling" without the "eerste
 Plates are stored without separators ("1ZTZ08"); users will type dashes or spaces ("1-ZTZ-08", "1 ZTZ 08"). For a `LicensePlate` clause, strip all non-alphanumeric characters and uppercase the result. A full plate is unique — always use `eq`.
 
 # Examples
+
+User: How many {$colorA} {$vehicleTypeA}s are registered?
+Plan:
+  where: VehicleType eq {$vehicleTypeA}, PrimaryColor eq {$colorA}
+  aggregates: count(*) as n
+  display: count
 
 User: How many Toyota Aygos are registered?
 Plan:

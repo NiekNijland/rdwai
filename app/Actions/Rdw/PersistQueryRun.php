@@ -7,6 +7,7 @@ namespace App\Actions\Rdw;
 use App\Models\QueryRun;
 use App\Services\QueryPlan\Plan;
 use App\Services\QueryPlan\PlanPresenter;
+use App\Services\QueryPlan\TokenUsage;
 use Illuminate\Support\Str;
 use LogicException;
 use MongoDB\Driver\Exception\BulkWriteException;
@@ -23,7 +24,6 @@ final class PersistQueryRun
     /**
      * @param list<array<string, mixed>> $rows
      * @param array<string, string> $soql
-     * @param array{prompt: int, completion: int, cacheRead: int, thought: int} $tokens
      */
     public function execute(
         string $prompt,
@@ -34,7 +34,7 @@ final class PersistQueryRun
         string $url,
         ?string $userId,
         string $model,
-        array $tokens,
+        TokenUsage $tokens,
         ?float $estimatedCost,
     ): QueryRun {
         $attributes = [
@@ -47,10 +47,10 @@ final class PersistQueryRun
             'display_hint' => $plan->display->value,
             'user_id' => $userId,
             'model' => $model,
-            'prompt_tokens' => $tokens['prompt'],
-            'completion_tokens' => $tokens['completion'],
-            'cache_read_tokens' => $tokens['cacheRead'],
-            'thought_tokens' => $tokens['thought'],
+            'prompt_tokens' => $tokens->prompt,
+            'completion_tokens' => $tokens->completion,
+            'cache_read_tokens' => $tokens->cacheRead,
+            'thought_tokens' => $tokens->thought,
             'estimated_cost' => $estimatedCost,
         ];
 

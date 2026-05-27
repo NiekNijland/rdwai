@@ -4,45 +4,26 @@ declare(strict_types=1);
 
 namespace App\Actions\Rdw;
 
+use App\Ai\Agents\QueryPlanAgent;
 use App\Enums\Locale;
 use App\Services\QueryPlan\CostEstimator;
-use App\Services\QueryPlan\Plan;
 use App\Services\QueryPlan\PlanFactory;
 use App\Services\QueryPlan\PlanRunner;
-use App\Services\QueryPlan\PlanSchema;
-use App\Services\QueryPlan\PromptBuilder;
-use Prism\Prism\Enums\Provider;
-use Prism\Prism\Facades\Prism;
+use App\Services\QueryPlan\QueryResult;
+use App\Services\QueryPlan\TokenUsage;
 
 class RunNaturalLanguageQuery
 {
     public function __construct(
-        private readonly PromptBuilder $promptBuilder,
         private readonly PlanFactory $planFactory,
         private readonly PlanRunner $planRunner,
         private readonly CostEstimator $costEstimator,
     ) {
     }
 
-    /**
-     * @return array{
-     *     plan: Plan,
-     *     rows: list<array<string, mixed>>,
-     *     soql: array<string, string>,
-     *     url: string,
-     *     model: string,
-     *     tokens: array{prompt: int, completion: int, cacheRead: int, thought: int},
-     *     estimatedCost: float|null,
-     * }
-     */
-    public function execute(string $userPrompt, Locale $locale): array
+    public function execute(string $userPrompt, Locale $locale): QueryResult
     {
-        $response = Prism::structured()
-            ->using(Provider::OpenAI, (string) config('rdwai.llm_model', 'gpt-4.1-nano'))
-            ->withSchema(PlanSchema::build())
-            ->withSystemPrompt($this->promptBuilder->systemPrompt($locale))
-            ->withPrompt($this->promptBuilder->userPrompt($userPrompt))
-            ->asStructured();
+        $response = QueryPlanAgent::make(locale: $locale)->ask($userPrompt);
 
         /** @var array<string, mixed> $raw */
         $raw = $response->structured;
@@ -50,19 +31,16 @@ class RunNaturalLanguageQuery
 
         $result = $this->planRunner->run($plan);
 
-        return [
-            'plan' => $plan,
-            'rows' => $result['rows'],
-            'soql' => $result['soql'],
-            'url' => $result['url'],
-            'model' => $response->meta->model,
-            'tokens' => [
-                'prompt' => $response->usage->promptTokens,
-                'completion' => $response->usage->completionTokens,
-                'cacheRead' => $response->usage->cacheReadInputTokens ?? 0,
-                'thought' => $response->usage->thoughtTokens ?? 0,
-            ],
-            'estimatedCost' => $this->costEstimator->estimate($response->meta->model, $response->usage),
-        ];
+        $model = $response->meta->model ?? '';
+
+        return new QueryResult(
+            plan: $plan,
+            rows: $result->rows,
+            soql: $result->soql,
+            url: $result->url,
+            model: $model,
+            tokens: TokenUsage::fromUsage($response->usage),
+            estimatedCost: $this->costEstimator->estimate($model, $response->usage),
+        );
     }
 }
