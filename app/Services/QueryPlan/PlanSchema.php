@@ -97,7 +97,10 @@ final class PlanSchema
                 ->description('Ordering applied after grouping. Reference field names or aggregate aliases.')
                 ->items($orderItem)
                 ->required(),
-            'limit' => $schema->integer()->description('Maximum rows to return. 1-1000.')->required(),
+            'limit' => $schema->integer()
+                ->nullable()
+                ->description('Row cap, or null for no cap. Set a number ONLY when the answer is a bounded set of rows: a fixed-size row list (table), a single record (1), or an explicit top-N ranking (bars — 1 for "most common", otherwise the N asked for, default 25). Leave null for every complete breakdown (timeseries, histogram, stacked_bars, pie) and for count/stats — a cap there silently drops rows, so a timeseries would lose its most recent periods and a share/pie its long tail. Max 1000; RDW already returns at most 1000 rows when null.')
+                ->required(),
             'display' => $schema->string()
                 ->enum(array_map(static fn (DisplayHint $d): string => $d->value, DisplayHint::cases()))
                 ->description('How to render the answer.')

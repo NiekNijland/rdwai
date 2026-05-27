@@ -60,6 +60,15 @@ final readonly class PlanRunner
     private const int ROW_TTL_SECONDS = 600;
 
     /**
+     * Socrata returns at most 1000 rows per request and defaults to the same
+     * cap when no `$limit` is sent. A complete breakdown (a {@see Plan} with a
+     * null limit) is paged at this size with `$offset` until a short page
+     * signals the end, so a daily timeseries or a fine-grained histogram
+     * returns every bucket instead of the first 1000.
+     */
+    private const int PROJECTION_PAGE_SIZE = 1000;
+
+    /**
      * @param  Repository  $cache  RDW responses are cached here, keyed on the
      *                             canonical SoQL params. Defaults to a no-op
      *                             store so unit tests opt in explicitly; the
@@ -344,12 +353,49 @@ final readonly class PlanRunner
     private function execute(QueryBuilder $builder, Plan $plan, array $buckets): array
     {
         if ($plan->aggregates !== [] || $plan->groupBy !== []) {
-            return $this->normaliseProjectionRows($builder->getProjection(), $plan->aggregates, $buckets);
+            return $this->normaliseProjectionRows($this->fetchProjectionRows($builder, $plan), $plan->aggregates, $buckets);
         }
 
         $records = $builder->get();
 
         return array_map(fn (object $r): array => $this->recordToArray($r, $plan->select), $records);
+    }
+
+    /**
+     * Fetch the raw projection rows for an aggregate / group-by query.
+     *
+     * An explicit {@see Plan::$limit} is an intentional bound — a top-N ranking
+     * (bars) or a capped list — so it runs as a single request. A null limit
+     * means "every bucket": Socrata would otherwise stop at its 1000-row
+     * default and, because breakdowns sort by the bucket field, silently drop
+     * the tail (the most recent periods of a daily timeseries, the heaviest
+     * bins of a histogram). So we page with `$offset` until a short page signals
+     * the end and assemble the full set. Only the projection path pages — an
+     * unbounded plain-row query must never walk all ~16M records, so
+     * {@see self::execute()} keeps it on the single-request `get()` path.
+     *
+     * Re-issuing a page is safe: the builder is immutable and never mutated, so
+     * a transient failure mid-pagination simply restarts {@see self::fetch()}
+     * from the first page.
+     *
+     * @param  QueryBuilder<RegisteredVehicle>  $builder
+     * @return list<array<string, mixed>>
+     */
+    private function fetchProjectionRows(QueryBuilder $builder, Plan $plan): array
+    {
+        if ($plan->limit !== null) {
+            return $builder->getProjection();
+        }
+
+        $rows = [];
+        $offset = 0;
+        do {
+            $page = $builder->limit(self::PROJECTION_PAGE_SIZE)->offset($offset)->getProjection();
+            $rows = array_merge($rows, $page);
+            $offset += self::PROJECTION_PAGE_SIZE;
+        } while (count($page) === self::PROJECTION_PAGE_SIZE);
+
+        return $rows;
     }
 
     /**

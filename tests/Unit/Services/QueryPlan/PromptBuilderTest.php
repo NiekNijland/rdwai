@@ -134,6 +134,22 @@ final class PromptBuilderTest extends TestCase
         self::assertStringContainsString('leading x trailing', $wrapped);
     }
 
+    public function test_prompt_tells_the_model_to_leave_limit_null_on_complete_breakdowns(): void
+    {
+        $prompt = $this->builder()->systemPrompt(Locale::English);
+
+        // The old blanket "Always set limit on every query" rule made the model
+        // cap aggregate breakdowns (a count-per-year timeseries got limit 120),
+        // which sorts by date and silently chops the most recent periods.
+        self::assertStringNotContainsString('Always set `limit` on every query', $prompt);
+        self::assertStringNotContainsString('~120 yearly', $prompt);
+
+        // The replacement teaches null for breakdowns and a number only for
+        // bounded row lists / rankings.
+        self::assertStringContainsString('limit: null', $prompt);
+        self::assertStringContainsString('groupShare divides by the total over every returned group', $prompt);
+    }
+
     public function test_prompt_picks_explanation_language_from_locale(): void
     {
         $builder = $this->builder();

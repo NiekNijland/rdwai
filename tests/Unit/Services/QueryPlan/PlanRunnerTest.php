@@ -21,6 +21,7 @@ use GuzzleHttp\Client as GuzzleClient;
 use GuzzleHttp\Exception\ConnectException;
 use GuzzleHttp\Handler\MockHandler;
 use GuzzleHttp\HandlerStack;
+use GuzzleHttp\Middleware;
 use GuzzleHttp\Psr7\Request as Psr7Request;
 use GuzzleHttp\Psr7\Response as Psr7Response;
 use Illuminate\Cache\ArrayStore;
@@ -495,7 +496,7 @@ final class PlanRunnerTest extends TestCase
 
             public function put($key, $value, $seconds)
             {
-                $this->puts[] = ['key' => (string) $key, 'ttl' => (int) $seconds];
+                $this->puts[] = ['key' => $key, 'ttl' => $seconds];
 
                 return parent::put($key, $value, $seconds);
             }
@@ -541,6 +542,85 @@ final class PlanRunnerTest extends TestCase
         self::assertNotSame($store->puts[0]['key'], $store->puts[1]['key']);
         self::assertSame(86_400, $store->puts[0]['ttl']);
         self::assertSame(600, $store->puts[1]['ttl']);
+    }
+
+    public function test_projection_path_pages_past_socratas_default_when_no_limit_is_set(): void
+    {
+        // A full page (PROJECTION_PAGE_SIZE rows) means "there may be more", so
+        // the runner fetches the next page; a short page ends it. This proves a
+        // limit-less breakdown is assembled beyond Socrata's 1000-row default
+        // instead of being silently truncated at the most recent buckets.
+        $page1 = array_map(
+            static fn (int $i): array => ['eerste_kleur' => 'C'.$i, 'n' => (string) $i],
+            range(1, 1000),
+        );
+        $page2 = [
+            ['eerste_kleur' => 'WIT', 'n' => '5'],
+            ['eerste_kleur' => 'ZWART', 'n' => '3'],
+        ];
+
+        $transactions = [];
+        $stack = HandlerStack::create(new MockHandler([
+            new Psr7Response(200, ['Content-Type' => 'application/json'], json_encode($page1, JSON_THROW_ON_ERROR)),
+            new Psr7Response(200, ['Content-Type' => 'application/json'], json_encode($page2, JSON_THROW_ON_ERROR)),
+        ]));
+        $stack->push(Middleware::history($transactions));
+        $guzzle = new GuzzleClient(['base_uri' => 'https://opendata.rdw.nl/', 'handler' => $stack]);
+        $rdw = new Rdw(http: new SocrataClient(new RdwConfiguration, $guzzle));
+        $runner = new PlanRunner($rdw, cache: new Repository(new ArrayStore), retryBackoffMs: 0);
+
+        $result = $runner->run(new Plan(
+            where: [],
+            select: [],
+            groupBy: [new GroupKey('PrimaryColor', Bucket::None)],
+            aggregates: [new AggregateClause(AggregateFn::Count, null, 'n')],
+            orderBy: [new OrderClause('PrimaryColor', OrderDirection::Asc)],
+            limit: null,
+            display: DisplayHint::Bars,
+            explanation: '',
+        ));
+
+        self::assertCount(1002, $result->rows);
+        self::assertSame('WIT', $result->rows[1000]['PrimaryColor']);
+
+        // Two upstream requests: offset 0, then offset 1000, each capped at the
+        // page size. The user-facing SoQL/url stay the clean limit-less form.
+        self::assertCount(2, $transactions);
+        $first = urldecode((string) $transactions[0]['request']->getUri());
+        $second = urldecode((string) $transactions[1]['request']->getUri());
+        self::assertStringContainsString('$limit=1000', $first);
+        self::assertStringContainsString('$offset=0', $first);
+        self::assertStringContainsString('$offset=1000', $second);
+        self::assertArrayNotHasKey('$limit', $result->soql);
+        self::assertArrayNotHasKey('$offset', $result->soql);
+    }
+
+    public function test_projection_path_does_not_page_when_a_limit_is_set(): void
+    {
+        // An explicit limit is an intentional bound (a top-N ranking), so even a
+        // page-sized result is a single request — never a second page. Only one
+        // response is queued: a second fetch would hit an empty MockHandler.
+        $rows = array_map(
+            static fn (int $i): array => ['eerste_kleur' => 'C'.$i, 'n' => (string) $i],
+            range(1, 1000),
+        );
+        $runner = $this->runnerForQueue([
+            new Psr7Response(200, ['Content-Type' => 'application/json'], json_encode($rows, JSON_THROW_ON_ERROR)),
+        ]);
+
+        $result = $runner->run(new Plan(
+            where: [],
+            select: [],
+            groupBy: [new GroupKey('PrimaryColor', Bucket::None)],
+            aggregates: [new AggregateClause(AggregateFn::Count, null, 'n')],
+            orderBy: [new OrderClause('n', OrderDirection::Desc)],
+            limit: 1000,
+            display: DisplayHint::Bars,
+            explanation: '',
+        ));
+
+        self::assertCount(1000, $result->rows);
+        self::assertSame('1000', $result->soql['$limit']);
     }
 
     private function colorCountPlan(): Plan

@@ -85,6 +85,25 @@ export function translateColumn(
     return translated === key ? humanizePascalCase(column) : translated;
 }
 
+// The value (Y) axis of a chart shows the first aggregate. `count` has no field,
+// so it reads as "Vehicles" (every result row is a registered vehicle); the other
+// functions name the field they summarise, e.g. "Average empty mass".
+export function valueAxisLabel(plan: Plan, t: (key: string) => string): string {
+    const aggregate = plan.aggregates[0];
+
+    if (aggregate === undefined || aggregate.fn === 'count') {
+        return t('pages.query.axis.vehicles');
+    }
+
+    const fn = t(`pages.query.axis.fn.${aggregate.fn}`);
+
+    if (aggregate.field === null) {
+        return fn;
+    }
+
+    return `${fn} ${translateColumn(aggregate.field, t)}`;
+}
+
 export function findNumericKey(row: QueryRow): string | undefined {
     for (const [k, v] of Object.entries(row)) {
         if (

@@ -15,6 +15,7 @@ import {
     isDateLike,
     localeTag,
     translateColumn,
+    valueAxisLabel,
 } from './format';
 import type { Plan } from './types';
 
@@ -120,6 +121,61 @@ describe('translateColumn', () => {
         expect(translateColumn('FirstAdmissionDate', identity)).toBe(
             'First admission date',
         );
+    });
+});
+
+describe('valueAxisLabel', () => {
+    const t = (key: string): string => {
+        const map: Record<string, string> = {
+            'pages.query.axis.vehicles': 'Vehicles',
+            'pages.query.axis.fn.avg': 'Average',
+            'pages.query.axis.fn.sum': 'Total',
+        };
+
+        return map[key] ?? key;
+    };
+
+    function planWithAggregate(aggregate: Plan['aggregates'][number]): Plan {
+        return {
+            where: [],
+            select: [],
+            groupBy: [],
+            aggregates: [aggregate],
+            orderBy: [],
+            limit: null,
+            display: 'histogram',
+            explanation: '',
+        };
+    }
+
+    it('labels a count aggregate as the vehicle unit', () => {
+        const plan = planWithAggregate({
+            fn: 'count',
+            field: null,
+            alias: 'count',
+        });
+
+        expect(valueAxisLabel(plan, t)).toBe('Vehicles');
+    });
+
+    it('falls back to the vehicle unit when there is no aggregate', () => {
+        expect(valueAxisLabel(planWithGroupBy([]), t)).toBe('Vehicles');
+    });
+
+    it('names the summarised field for non-count aggregates', () => {
+        const plan = planWithAggregate({
+            fn: 'avg',
+            field: 'EmptyMass',
+            alias: 'avg_mass',
+        });
+
+        expect(valueAxisLabel(plan, t)).toBe('Average Empty mass');
+    });
+
+    it('uses the function label alone when the aggregate has no field', () => {
+        const plan = planWithAggregate({ fn: 'sum', field: null, alias: 'n' });
+
+        expect(valueAxisLabel(plan, t)).toBe('Total');
     });
 });
 

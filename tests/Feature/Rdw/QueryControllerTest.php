@@ -23,6 +23,7 @@ use NiekNijland\RDW\Http\SocrataClient;
 use NiekNijland\RDW\Rdw;
 use RuntimeException;
 use Tests\TestCase;
+use Throwable;
 
 final class QueryControllerTest extends TestCase
 {
@@ -461,7 +462,7 @@ final class QueryControllerTest extends TestCase
      * Guzzle ConnectException for a timeout), and pin a zero-backoff PlanRunner
      * so retry-driven tests resolve immediately instead of sleeping.
      *
-     * @param  list<Psr7Response|\Throwable>  $queue
+     * @param  list<Psr7Response|Throwable>  $queue
      */
     private function fakeRdwWithQueue(array $queue): void
     {

@@ -32,7 +32,11 @@ import { ErrorView, ResultView } from './components/result-view';
 import { pickDiscoverItems, SUGGESTIONS_EN, SUGGESTIONS_NL } from './examples';
 import type { DiscoverItem, DiscoverViz } from './examples';
 import { localeTag } from './format';
-import { extractPlateFromText } from './plate';
+import {
+    extractPlateFromText,
+    isMotorcyclePlate,
+    splitPlateLines,
+} from './plate';
 import {
     clearRecentQueries,
     getRecentQueriesServerSnapshot,
@@ -547,15 +551,10 @@ function ComposerCard({
                     <div className="mt-3 flex items-center justify-between gap-3 border-t pt-3">
                         <div className="inline-flex items-center gap-3 text-xs whitespace-nowrap text-muted-foreground">
                             {plate !== null ? (
-                                <span
-                                    className="rdw-plate rdw-fade-in"
-                                    aria-hidden="true"
-                                >
-                                    <span className="rdw-plate-flag">NL</span>
-                                    <span className="rdw-plate-text">
-                                        {plate}
-                                    </span>
-                                </span>
+                                <PlateChip
+                                    plate={plate}
+                                    className="rdw-fade-in"
+                                />
                             ) : (
                                 <>
                                     <span className="inline-flex items-center gap-1">
@@ -723,12 +722,9 @@ function DiscoverCard({
                     </svg>
                 )}
                 {viz === 'plate' && (
-                    <span className="rdw-plate">
-                        <span className="rdw-plate-flag">NL</span>
-                        <span className="rdw-plate-text">
-                            {extractPlateFromText(question) ?? 'GT-486-N'}
-                        </span>
-                    </span>
+                    <PlateChip
+                        plate={extractPlateFromText(question) ?? 'GT-486-N'}
+                    />
                 )}
             </div>
             <span className="line-clamp-2 text-[13px] leading-snug font-medium text-foreground">
@@ -738,6 +734,41 @@ function DiscoverCard({
                 {t(VIZ_LABEL_KEYS[viz])}
             </span>
         </button>
+    );
+}
+
+// ─── Plate chip ───────────────────────────────────────────────
+// Renders the yellow NL plate badge. M-series plates are motorcycles, which
+// carry a square two-line plate, so the value stacks instead of running wide.
+function PlateChip({
+    plate,
+    className,
+}: {
+    plate: string;
+    className?: string;
+}) {
+    if (isMotorcyclePlate(plate)) {
+        const [top, bottom] = splitPlateLines(plate);
+
+        return (
+            <span
+                className={cn('rdw-plate rdw-plate--moto', className)}
+                aria-hidden="true"
+            >
+                <span className="rdw-plate-flag">NL</span>
+                <span className="rdw-plate-text">
+                    <span>{top}</span>
+                    {bottom !== '' && <span>{bottom}</span>}
+                </span>
+            </span>
+        );
+    }
+
+    return (
+        <span className={cn('rdw-plate', className)} aria-hidden="true">
+            <span className="rdw-plate-flag">NL</span>
+            <span className="rdw-plate-text">{plate}</span>
+        </span>
     );
 }
 
@@ -816,8 +847,7 @@ function ResultPanel({
                         <button
                             type="button"
                             onClick={onEditPrompt}
-                            title={t('pages.query.editPrompt')}
-                            className="flex-1 cursor-text rounded-md text-left text-foreground italic transition hover:bg-[var(--rdw-orange-faint)] hover:text-[var(--rdw-orange)] focus-visible:ring-2 focus-visible:ring-[var(--rdw-orange)]/40 focus-visible:outline-none"
+                            className="flex-1 cursor-text rounded-md text-left text-foreground italic decoration-[var(--rdw-orange)]/50 decoration-dotted underline-offset-[3px] transition-colors hover:text-[var(--rdw-orange)] hover:underline focus-visible:ring-2 focus-visible:ring-[var(--rdw-orange)]/40 focus-visible:outline-none"
                         >
                             "{trimmed}"
                         </button>

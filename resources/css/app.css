@@ -140,6 +140,15 @@
     body {
         @apply bg-background text-foreground;
     }
+
+    /* Anything clickable should show the pointer cursor. Explicit cursor-*
+     * utilities (e.g. cursor-text, cursor-not-allowed) still win because they
+     * live in a later cascade layer than base. */
+    button:not(:disabled),
+    [role='button']:not([aria-disabled='true']),
+    summary {
+        cursor: pointer;
+    }
 }
 
 /* ─── RDW.AI hero / query page ──────────────────────────────── */
@@ -403,6 +412,18 @@
     display: grid;
     place-items: center;
     white-space: nowrap;
+}
+
+/* Motorcycle plates are square and stack their groups onto two lines. */
+.rdw-plate--moto .rdw-plate-text {
+    flex-direction: column;
+    gap: 0;
+    padding: 2px 6px;
+    line-height: 1.05;
+    letter-spacing: 0.04em;
+    display: flex;
+    align-items: center;
+    justify-content: center;
 }
 
 .rdw-bar-grow {

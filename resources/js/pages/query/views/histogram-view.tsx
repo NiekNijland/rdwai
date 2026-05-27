@@ -6,9 +6,16 @@ import {
     ChartTooltipContent,
 } from '@/components/ui/chart';
 import type { ChartConfig } from '@/components/ui/chart';
+import { useTranslation } from '@/hooks/use-translation';
 
-import { findNumericKey, formatNumber } from '../format';
+import {
+    findNumericKey,
+    formatNumber,
+    translateColumn,
+    valueAxisLabel,
+} from '../format';
 import type { Plan, QueryRow } from '../types';
+import { ValueTooltipRow } from './value-tooltip-row';
 
 export function HistogramView({
     rows,
@@ -21,6 +28,7 @@ export function HistogramView({
     locale: string;
     fallback: React.ReactNode;
 }) {
+    const { t } = useTranslation();
     const firstRow = rows[0] ?? {};
     const binKey = plan.groupBy[0]?.field ?? Object.keys(firstRow)[0];
     const valueKey = plan.aggregates[0]?.alias ?? findNumericKey(firstRow);
@@ -70,9 +78,12 @@ export function HistogramView({
         return <>{fallback}</>;
     }
 
+    const xLabel = translateColumn(binKey, t);
+    const yLabel = valueAxisLabel(plan, t);
+
     const config = {
         value: {
-            label: plan.aggregates[0]?.alias ?? 'count',
+            label: yLabel,
             color: 'var(--chart-1)',
         },
     } satisfies ChartConfig;
@@ -81,7 +92,7 @@ export function HistogramView({
         <ChartContainer config={config} className="h-[360px] w-full">
             <BarChart
                 data={data}
-                margin={{ left: 12, right: 12, top: 8, bottom: 8 }}
+                margin={{ left: 12, right: 12, top: 8, bottom: 28 }}
                 barCategoryGap={1}
             >
                 <CartesianGrid vertical={false} strokeDasharray="3 3" />
@@ -93,20 +104,42 @@ export function HistogramView({
                     tick={{ fontSize: 11 }}
                     minTickGap={4}
                     interval="preserveStartEnd"
+                    label={{
+                        value: xLabel,
+                        position: 'insideBottom',
+                        offset: -16,
+                        fill: 'var(--muted-foreground)',
+                        fontSize: 12,
+                    }}
                 />
                 <YAxis
                     tickLine={false}
                     axisLine={false}
-                    width={48}
+                    width={64}
                     tick={{ fontSize: 11 }}
                     tickFormatter={(v) => formatNumber(v, locale)}
+                    label={{
+                        value: yLabel,
+                        angle: -90,
+                        position: 'insideLeft',
+                        offset: 8,
+                        style: { textAnchor: 'middle' },
+                        fill: 'var(--muted-foreground)',
+                        fontSize: 12,
+                    }}
                 />
                 <ChartTooltip
                     cursor={{ fill: 'var(--chart-1)', fillOpacity: 0.08 }}
                     content={
                         <ChartTooltipContent
                             indicator="dot"
-                            formatter={(value) => formatNumber(value, locale)}
+                            formatter={(value) => (
+                                <ValueTooltipRow
+                                    label={yLabel}
+                                    value={value}
+                                    locale={locale}
+                                />
+                            )}
                         />
                     }
                 />

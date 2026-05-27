@@ -33,4 +33,18 @@ final class QueryProgramSchemaTest extends TestCase
         self::assertArrayHasKey('id', $schema['properties']['queries']['items']['properties']);
         self::assertArrayHasKey('derive', $schema['properties']['presentation']['properties']);
     }
+
+    public function test_query_limit_is_nullable_so_breakdowns_can_opt_out_of_a_row_cap(): void
+    {
+        $built = QueryProgramSchema::build(new JsonSchemaTypeFactory);
+
+        $schema = (new ObjectSchema($built))->toSchema();
+        $limit = $schema['properties']['queries']['items']['properties']['limit'];
+
+        // A nullable integer serialises to type ["integer","null"] while staying
+        // required, so the model can pass null on a complete breakdown rather
+        // than guessing a cap that would truncate the result.
+        self::assertSame(['integer', 'null'], $limit['type']);
+        self::assertContains('limit', $schema['properties']['queries']['items']['required']);
+    }
 }

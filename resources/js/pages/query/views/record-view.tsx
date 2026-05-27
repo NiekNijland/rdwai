@@ -7,7 +7,7 @@ import {
     isDateLike,
     translateColumn,
 } from '../format';
-import { formatPlate } from '../plate';
+import { formatPlate, isMotorcyclePlate, splitPlateLines } from '../plate';
 import type { QueryRow } from '../types';
 
 const SECTION_ORDER = [
@@ -104,7 +104,9 @@ export function RecordView({
         typeof record.LicensePlate === 'string' && record.LicensePlate !== ''
             ? record.LicensePlate
             : null;
-    const isMotorcycle = record.VehicleType === MOTORCYCLE_VEHICLE_TYPE;
+    const isMotorcycle =
+        record.VehicleType === MOTORCYCLE_VEHICLE_TYPE ||
+        (plate !== null && isMotorcyclePlate(plate));
 
     return (
         <div className="flex flex-col gap-6">
@@ -176,15 +178,15 @@ function LicensePlateBadge({
         return (
             <div className="flex justify-center">
                 <div className="inline-flex items-stretch overflow-hidden rounded-md border-2 border-black bg-[#ffd400] font-mono shadow-sm">
-                    <div className="flex w-8 items-center justify-center bg-[#0033a0] text-[11px] font-bold text-white">
+                    <div className="flex w-7 items-center justify-center bg-[#0033a0] text-[10px] font-bold text-white">
                         NL
                     </div>
-                    <div className="flex flex-col items-center justify-center px-5 py-3 leading-[1.05]">
-                        <span className="text-3xl font-bold tracking-[0.15em] text-black tabular-nums sm:text-4xl">
+                    <div className="flex flex-col items-center justify-center px-3 py-2 leading-none">
+                        <span className="text-2xl font-bold tracking-[0.08em] text-black tabular-nums sm:text-3xl">
                             {top}
                         </span>
                         {bottom !== '' && (
-                            <span className="text-3xl font-bold tracking-[0.15em] text-black tabular-nums sm:text-4xl">
+                            <span className="mt-0.5 text-2xl font-bold tracking-[0.08em] text-black tabular-nums sm:text-3xl">
                                 {bottom}
                             </span>
                         )}
@@ -206,22 +208,6 @@ function LicensePlateBadge({
             </div>
         </div>
     );
-}
-
-/**
- * Splits a dash-formatted plate into two rows for the square motorcycle plate:
- * all groups but the last on top, the final group below
- * (e.g. "14-MB-BP" → ["14-MB", "BP"]). Returns an empty second row when the
- * plate has no separators so the caller renders a single line.
- */
-function splitPlateLines(formatted: string): [string, string] {
-    const groups = formatted.split('-');
-
-    if (groups.length < 2) {
-        return [formatted, ''];
-    }
-
-    return [groups.slice(0, -1).join('-'), groups[groups.length - 1]];
 }
 
 function groupBySection(

@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
-import { detectPlate, extractPlateFromText, formatPlate } from './plate';
+import {
+    detectPlate,
+    extractPlateFromText,
+    formatPlate,
+    isMotorcyclePlate,
+    splitPlateLines,
+} from './plate';
 
 describe('detectPlate', () => {
     it('accepts every Dutch sidecode and normalises separators/casing', () => {
@@ -44,6 +50,31 @@ describe('formatPlate', () => {
 
     it('returns the input untouched when it matches no sidecode', () => {
         expect(formatPlate('ABCDEF')).toBe('ABCDEF');
+    });
+});
+
+describe('isMotorcyclePlate', () => {
+    it('treats M-series plates as motorcycles regardless of separators', () => {
+        expect(isMotorcyclePlate('ML-82-BV')).toBe(true);
+        expect(isMotorcyclePlate('ml82bv')).toBe(true);
+        expect(isMotorcyclePlate('MF-001-K')).toBe(true);
+    });
+
+    it('treats every other series as a regular plate', () => {
+        expect(isMotorcyclePlate('GT-486-N')).toBe(false);
+        expect(isMotorcyclePlate('8-KZD-53')).toBe(false);
+        expect(isMotorcyclePlate('')).toBe(false);
+    });
+});
+
+describe('splitPlateLines', () => {
+    it('puts every group but the last on the top line', () => {
+        expect(splitPlateLines('ML-82-BV')).toEqual(['ML-82', 'BV']);
+        expect(splitPlateLines('14-MB-BP')).toEqual(['14-MB', 'BP']);
+    });
+
+    it('returns an empty second line when there are no separators', () => {
+        expect(splitPlateLines('ML82BV')).toEqual(['ML82BV', '']);
     });
 });
 

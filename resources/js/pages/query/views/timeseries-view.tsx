@@ -14,6 +14,7 @@ import {
     ChartTooltipContent,
 } from '@/components/ui/chart';
 import type { ChartConfig } from '@/components/ui/chart';
+import { useTranslation } from '@/hooks/use-translation';
 
 import {
     detectTimeGranularity,
@@ -22,9 +23,12 @@ import {
     formatNumber,
     isDateLike,
     localeTag,
+    translateColumn,
+    valueAxisLabel,
 } from '../format';
 import type { TimeGranularity } from '../format';
 import type { Plan, QueryRow } from '../types';
+import { ValueTooltipRow } from './value-tooltip-row';
 
 // At or below this many buckets the series reads as discrete periods, so bars
 // communicate "a count per period" better than an interpolated area; beyond it
@@ -42,6 +46,7 @@ export function TimeseriesView({
     locale: string;
     fallback: React.ReactNode;
 }) {
+    const { t } = useTranslation();
     const firstRow = rows[0] ?? {};
     const groupFields = plan.groupBy.map((k) => k.field);
     const dateKey =
@@ -67,9 +72,12 @@ export function TimeseriesView({
     const granularity = detectTimeGranularity(points.map((d) => d.x));
     const data = fillTimeBuckets(points, granularity);
 
+    const xLabel = translateColumn(dateKey, t);
+    const yLabel = valueAxisLabel(plan, t);
+
     const config = {
         value: {
-            label: plan.aggregates[0]?.alias ?? 'count',
+            label: yLabel,
             color: 'var(--chart-1)',
         },
     } satisfies ChartConfig;
@@ -85,6 +93,13 @@ export function TimeseriesView({
                 formatDateTick(String(v), granularity, locale)
             }
             minTickGap={32}
+            label={{
+                value: xLabel,
+                position: 'insideBottom',
+                offset: -16,
+                fill: 'var(--muted-foreground)',
+                fontSize: 12,
+            }}
         />
     );
 
@@ -92,10 +107,19 @@ export function TimeseriesView({
         <YAxis
             tickLine={false}
             axisLine={false}
-            width={48}
+            width={64}
             tick={{ fontSize: 11 }}
             allowDecimals={false}
             tickFormatter={(v) => formatNumber(v, locale)}
+            label={{
+                value: yLabel,
+                angle: -90,
+                position: 'insideLeft',
+                offset: 8,
+                style: { textAnchor: 'middle' },
+                fill: 'var(--muted-foreground)',
+                fontSize: 12,
+            }}
         />
     );
 
@@ -103,12 +127,20 @@ export function TimeseriesView({
         <ChartTooltip
             cursor={{ stroke: 'var(--chart-1)', strokeOpacity: 0.3 }}
             content={
+                // "dot" keeps the period header above the value row; with "line"
+                // the single-series label nests and gets dropped by the formatter.
                 <ChartTooltipContent
-                    indicator="line"
+                    indicator="dot"
                     labelFormatter={(label) =>
                         formatDateLabel(String(label), granularity, locale)
                     }
-                    formatter={(value) => formatNumber(value, locale)}
+                    formatter={(value) => (
+                        <ValueTooltipRow
+                            label={yLabel}
+                            value={value}
+                            locale={locale}
+                        />
+                    )}
                 />
             }
         />
@@ -121,7 +153,7 @@ export function TimeseriesView({
             <ChartContainer config={config} className="h-[360px] w-full">
                 <BarChart
                     data={data}
-                    margin={{ left: 12, right: 12, top: 8, bottom: 8 }}
+                    margin={{ left: 12, right: 12, top: 8, bottom: 28 }}
                 >
                     <CartesianGrid vertical={false} strokeDasharray="3 3" />
                     {xAxis}
@@ -141,7 +173,7 @@ export function TimeseriesView({
         <ChartContainer config={config} className="h-[360px] w-full">
             <AreaChart
                 data={data}
-                margin={{ left: 12, right: 12, top: 8, bottom: 8 }}
+                margin={{ left: 12, right: 12, top: 8, bottom: 28 }}
             >
                 <defs>
                     <linearGradient

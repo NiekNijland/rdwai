@@ -45,6 +45,36 @@ export function formatPlate(plate: string): string {
     return plate;
 }
 
+/**
+ * Dutch motorcycle plates are issued in the "M" series, so the plate always
+ * starts with an M. That first letter is the only signal available before the
+ * vehicle's RDW record is fetched, so the composer chip relies on it to pick
+ * the square two-line plate rendering. Accepts a raw or dash-formatted plate.
+ */
+export function isMotorcyclePlate(plate: string): boolean {
+    return plate
+        .trim()
+        .replace(/[^0-9A-Za-z]/g, '')
+        .toUpperCase()
+        .startsWith('M');
+}
+
+/**
+ * Splits a dash-formatted plate into two rows for the square motorcycle plate:
+ * all groups but the last on top, the final group below
+ * (e.g. "14-MB-BP" → ["14-MB", "BP"]). Returns an empty second row when the
+ * plate has no separators so the caller renders a single line.
+ */
+export function splitPlateLines(formatted: string): [string, string] {
+    const groups = formatted.split('-');
+
+    if (groups.length < 2) {
+        return [formatted, ''];
+    }
+
+    return [groups.slice(0, -1).join('-'), groups[groups.length - 1]];
+}
+
 // A plate has at most three groups, so it can span at most three
 // whitespace-separated tokens ("GT-486-N", "GT486N" and "GT 486 N" are all the
 // same plate). Anything wider than that is sentence text, never a plate.
