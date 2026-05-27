@@ -16,7 +16,7 @@ final class PresentationFactoryTest extends TestCase
 {
     public function test_builds_a_plain_presentation_pointing_at_a_query(): void
     {
-        $presentation = (new PresentationFactory)->fromArray([
+        $presentation = (new PresentationFactory())->fromArray([
             'resultRef' => 'q2',
             'display' => 'count',
             'derive' => null,
@@ -32,14 +32,14 @@ final class PresentationFactoryTest extends TestCase
     {
         $this->expectException(InvalidArgumentException::class);
 
-        (new PresentationFactory)->fromArray([
+        (new PresentationFactory())->fromArray([
             'resultRef' => 'q9', 'display' => 'count', 'derive' => null, 'explanation' => 'x',
         ], ['q1']);
     }
 
     public function test_builds_a_percentage_derive(): void
     {
-        $presentation = (new PresentationFactory)->fromArray([
+        $presentation = (new PresentationFactory())->fromArray([
             'resultRef' => Presentation::DERIVED_REF,
             'display' => 'count',
             'derive' => ['op' => 'percentage', 'numerator' => 'q1', 'denominator' => 'q2'],
@@ -61,7 +61,7 @@ final class PresentationFactoryTest extends TestCase
     {
         $this->expectException(InvalidArgumentException::class);
 
-        (new PresentationFactory)->fromArray([
+        (new PresentationFactory())->fromArray([
             'resultRef' => 'q1',
             'display' => 'count',
             'derive' => ['op' => 'percentage', 'numerator' => 'q1', 'denominator' => 'q2'],
@@ -73,7 +73,7 @@ final class PresentationFactoryTest extends TestCase
     {
         $this->expectException(InvalidArgumentException::class);
 
-        (new PresentationFactory)->fromArray([
+        (new PresentationFactory())->fromArray([
             'resultRef' => Presentation::DERIVED_REF,
             'display' => 'count',
             'derive' => ['op' => 'ratio', 'numerator' => 'q1', 'denominator' => 'q9'],
@@ -83,7 +83,7 @@ final class PresentationFactoryTest extends TestCase
 
     public function test_builds_a_group_share_derive(): void
     {
-        $presentation = (new PresentationFactory)->fromArray([
+        $presentation = (new PresentationFactory())->fromArray([
             'resultRef' => Presentation::DERIVED_REF,
             'display' => 'count',
             'derive' => [
@@ -107,7 +107,7 @@ final class PresentationFactoryTest extends TestCase
     {
         $this->expectException(InvalidArgumentException::class);
 
-        (new PresentationFactory)->fromArray([
+        (new PresentationFactory())->fromArray([
             'resultRef' => Presentation::DERIVED_REF,
             'display' => 'count',
             'derive' => ['op' => 'groupShare', 'source' => 'q1', 'selectorColumn' => '', 'selectorValue' => ''],
@@ -117,7 +117,7 @@ final class PresentationFactoryTest extends TestCase
 
     public function test_rejects_an_invalid_op_and_display(): void
     {
-        $factory = new PresentationFactory;
+        $factory = new PresentationFactory();
 
         try {
             $factory->fromArray([

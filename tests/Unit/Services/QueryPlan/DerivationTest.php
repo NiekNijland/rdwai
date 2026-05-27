@@ -13,7 +13,7 @@ final class DerivationTest extends TestCase
 {
     public function test_percentage_stores_the_raw_quotient_and_operands(): void
     {
-        $derived = (new Derivation)->percentage(12_345, 380_210);
+        $derived = (new Derivation())->percentage(12_345, 380_210);
 
         self::assertSame(DeriveOp::Percentage, $derived->op);
         self::assertEqualsWithDelta(0.03247, $derived->value, 0.00001);
@@ -23,7 +23,7 @@ final class DerivationTest extends TestCase
 
     public function test_ratio_difference_and_sum(): void
     {
-        $derivation = new Derivation;
+        $derivation = new Derivation();
 
         self::assertSame(2.0, $derivation->ratio(10, 5)->value);
         self::assertSame(5.0, $derivation->difference(8, 3)->value);
@@ -34,12 +34,12 @@ final class DerivationTest extends TestCase
     {
         $this->expectException(DerivationException::class);
 
-        (new Derivation)->percentage(1, 0);
+        (new Derivation())->percentage(1, 0);
     }
 
     public function test_group_share_selects_a_group_and_divides_by_the_column_total(): void
     {
-        $derived = (new Derivation)->groupShare(
+        $derived = (new Derivation())->groupShare(
             rows: [
                 ['PrimaryColor' => 'GEEL', 'n' => '320'],
                 ['PrimaryColor' => 'WIT', 'n' => '4680'],
@@ -60,7 +60,7 @@ final class DerivationTest extends TestCase
     {
         $this->expectException(DerivationException::class);
 
-        (new Derivation)->groupShare(
+        (new Derivation())->groupShare(
             rows: [['PrimaryColor' => 'WIT', 'n' => '4680']],
             labelColumn: 'PrimaryColor',
             value: 'GEEL',

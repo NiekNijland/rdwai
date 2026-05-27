@@ -35,8 +35,6 @@ final class StepReferenceTest extends TestCase
 
     public function test_rejects_partial_or_mixed_tokens(): void
     {
-        // A literal that merely contains braces, or concatenates a token with
-        // other text, must not be treated as a reference.
         self::assertNull(StepReference::tryParse('prefix {{q1.Brand}}'));
         self::assertNull(StepReference::tryParse('{{q1.Brand}} suffix'));
         self::assertNull(StepReference::tryParse('{{q1.Brand}}{{q2.Brand}}'));

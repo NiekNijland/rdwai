@@ -33,8 +33,7 @@ final class QueryProgramFactoryTest extends TestCase
         self::assertSame('q1', $program->queries[0]->id);
         self::assertSame('q2', $program->queries[1]->id);
 
-        // The reference token survives the factory untouched — resolution is a
-        // runtime concern, not a build-time one.
+        // The reference token survives untouched; resolution is a runtime concern.
         self::assertSame(WhereOp::Equals, $program->queries[1]->plan->where[0]->op);
         self::assertSame('{{q1.Brand}}', $program->queries[1]->plan->where[0]->value);
         self::assertSame('{{q1.CommercialName}}', $program->queries[1]->plan->where[1]->value);
@@ -128,7 +127,7 @@ final class QueryProgramFactoryTest extends TestCase
 
     private function factory(): QueryProgramFactory
     {
-        return new QueryProgramFactory(new PlanFactory(new SchemaRegistry), new PresentationFactory);
+        return new QueryProgramFactory(new PlanFactory(new SchemaRegistry()), new PresentationFactory());
     }
 
     /**
