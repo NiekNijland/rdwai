@@ -16,6 +16,7 @@ final class StepReferenceResolver
         );
 
         return new Plan(
+            dataset: $plan->dataset,
             where: $where,
             select: $plan->select,
             groupBy: $plan->groupBy,
@@ -24,7 +25,6 @@ final class StepReferenceResolver
             limit: $plan->limit,
             display: $plan->display,
             explanation: $plan->explanation,
-            dataset: $plan->dataset,
         );
     }
 
@@ -89,9 +89,12 @@ final class StepReferenceResolver
             ));
         }
 
-        if (count($rows) >= self::LIST_LIMIT) {
+        // The prompt instructs the LLM to set lookup `limit: 1000` and PlanFactory clamps to the
+        // same ceiling, so a row count *at* LIST_LIMIT is a complete result the model asked for;
+        // only refuse when it spilled past the cap.
+        if (count($rows) > self::LIST_LIMIT) {
             throw new StepReferenceException(sprintf(
-                'Reference "%s" returned %d rows, which saturates the %d-row cross-dataset limit; ask a more specific question.',
+                'Reference "%s" returned %d rows, which exceeds the %d-row cross-dataset limit; ask a more specific question.',
                 $reference->token(),
                 count($rows),
                 self::LIST_LIMIT,

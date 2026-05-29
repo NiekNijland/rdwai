@@ -8,6 +8,7 @@ use App\Actions\Rdw\RunNaturalLanguageQuery;
 use App\Services\QueryPlan\DisplayHint;
 use App\Services\QueryPlan\Plan;
 use App\Services\QueryPlan\QueryResult;
+use App\Services\QueryPlan\TargetDataset;
 use App\Services\QueryPlan\TokenUsage;
 use Mockery;
 use Tests\TestCase;
@@ -23,6 +24,7 @@ final class QueryRateLimitTest extends TestCase
         // @phpstan-ignore method.notFound (Mockery fluent API is not statically resolvable)
         $mock->shouldReceive('execute')->andReturn(new QueryResult(
             plan: new Plan(
+                dataset: TargetDataset::RegisteredVehicles,
                 where: [],
                 select: [],
                 groupBy: [],

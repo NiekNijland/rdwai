@@ -11,6 +11,7 @@ use App\Services\QueryPlan\QueryLedger;
 use App\Services\QueryPlan\RunnerResult;
 use App\Services\QueryPlan\StepReferenceException;
 use App\Services\QueryPlan\StepReferenceResolver;
+use App\Services\QueryPlan\TargetDataset;
 use App\Services\QueryPlan\WhereClause;
 use App\Services\QueryPlan\WhereOp;
 use PHPUnit\Framework\TestCase;
@@ -113,15 +114,32 @@ final class StepReferenceResolverTest extends TestCase
         self::assertSame('{{q1.LicensePlate}}', $resolved->where[0]->value);
     }
 
-    public function test_in_op_rejects_a_saturated_lookup(): void
+    public function test_in_op_accepts_a_lookup_at_exactly_the_limit(): void
     {
+        // The prompt tells the LLM to set lookup `limit: 1000`; refusing a complete cap-sized
+        // result would silently break those questions.
         $rows = array_map(
             static fn (int $i): array => ['LicensePlate' => sprintf('AA-%03d-A', $i)],
             range(1, StepReferenceResolver::LIST_LIMIT),
         );
 
+        $resolved = (new StepReferenceResolver)->resolve(
+            $this->plan([new WhereClause('LicensePlate', WhereOp::In, '{{q1.LicensePlate}}')]),
+            $this->ledgerWith('q1', $rows),
+        );
+
+        self::assertCount(StepReferenceResolver::LIST_LIMIT, $resolved->where[0]->values);
+    }
+
+    public function test_in_op_rejects_a_lookup_that_exceeds_the_limit(): void
+    {
+        $rows = array_map(
+            static fn (int $i): array => ['LicensePlate' => sprintf('AA-%04d-A', $i)],
+            range(1, StepReferenceResolver::LIST_LIMIT + 1),
+        );
+
         $this->expectException(StepReferenceException::class);
-        $this->expectExceptionMessage('saturates the 1000-row cross-dataset limit');
+        $this->expectExceptionMessage('exceeds the 1000-row cross-dataset limit');
 
         (new StepReferenceResolver)->resolve(
             $this->plan([new WhereClause('LicensePlate', WhereOp::In, '{{q1.LicensePlate}}')]),
@@ -144,7 +162,7 @@ final class StepReferenceResolverTest extends TestCase
      */
     private function plan(array $where): Plan
     {
-        return new Plan($where, [], [], [], [], 1, DisplayHint::Count, '');
+        return new Plan(TargetDataset::RegisteredVehicles, $where, [], [], [], [], 1, DisplayHint::Count, '');
     }
 
     /**

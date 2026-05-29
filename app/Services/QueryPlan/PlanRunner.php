@@ -33,27 +33,26 @@ final readonly class PlanRunner
     private const int DEFAULT_MAX_PROJECTION_ROWS = 50_000;
 
     /**
-     * RegisteredVehicleFuels numeric columns that Socrata stores as `text`. A `gt`/`lt`/`eq` against
-     * one of these compares lexicographically without a `to_number(...)` wrap (so `"9" > "150"`). Other
-     * numeric columns on the same dataset (the WLTP family, range/electricity fields) are kept on the
-     * normal `where()` path because we haven't verified their underlying Socrata `dataTypeName`; add
-     * an entry here once verified.
+     * RegisteredVehicleFuels columns Socrata stores as `text`, by their Dutch source key (enum
+     * `->value`). Comparisons against these need a `to_number(...)` wrap to avoid lexicographic
+     * order. WLTP and range/electricity fields are intentionally absent: their underlying
+     * `dataTypeName` hasn't been verified — extend the list once it is.
      */
     private const array TEXT_STORED_NUMERIC_FUEL_FIELDS = [
-        'NetMaximumPower',
-        'NominalContinuousMaximumPower',
-        'Co2EmissionsCombined',
-        'Co2EmissionsWeighted',
-        'FuelConsumptionOuter',
-        'FuelConsumptionCombined',
-        'FuelConsumptionCity',
-        'FuelConsumptionWeightedCombined',
-        'NoiseLevelDriving',
-        'NoiseLevelStationary',
-        'ParticulateEmissionsLight',
-        'ParticulateEmissionsHeavy',
-        'SootEmissions',
-        'NoiseLevelRpm',
+        'nettomaximumvermogen',
+        'nominaal_continu_maximumvermogen',
+        'co2_uitstoot_gecombineerd',
+        'co2_uitstoot_gewogen',
+        'brandstofverbruik_buiten',
+        'brandstofverbruik_gecombineerd',
+        'brandstofverbruik_stad',
+        'brandstofverbruik_gewogen_gecombineerd',
+        'geluidsniveau_rijdend',
+        'geluidsniveau_stationair',
+        'uitstoot_deeltjes_licht',
+        'uitstoot_deeltjes_zwaar',
+        'roetuitstoot',
+        'toerental_geluidsniveau',
     ];
 
     public function __construct(
@@ -201,15 +200,16 @@ final readonly class PlanRunner
     }
 
     /**
+     * Emits `to_number(col) <op> n` for allowlisted text-stored numerics, otherwise the typed
+     * `where()` path. NB: `!=` on a text-stored numeric drops NULL/empty cells (SoQL evaluates
+     * `to_number('') != n` to NULL); acceptable since empty cells aren't meaningfully numeric.
+     *
      * @param  QueryBuilder<RegisteredVehicle|RegisteredVehicleFuel>  $builder
      * @return QueryBuilder<RegisteredVehicle|RegisteredVehicleFuel>
      */
     private function applyComparison(QueryBuilder $builder, BackedEnum $field, string $rawValue, string $operator, TargetDataset $dataset): QueryBuilder
     {
         if ($this->needsToNumberWrap($field, $dataset)) {
-            // `!=` against a text-stored numeric excludes NULL rows: SoQL's `to_number('')` is NULL
-            // and `NULL != n` evaluates to NULL (treated as false). Acceptable — empty cells aren't
-            // meaningful for numeric comparisons anyway.
             return $builder->whereRaw(sprintf(
                 'to_number(%s) %s %s',
                 $field->value,
@@ -252,10 +252,10 @@ final readonly class PlanRunner
     }
 
     /**
-     * Whether numeric comparisons against this field must be wrapped in `to_number(...)`. Only true
-     * for the allowlisted text-stored columns on RegisteredVehicleFuels — wrapping a column that is
-     * already stored as `number` is wasteful and the wrap is the only reason the raw-SoQL path
-     * exists, so we keep it narrow.
+     * Whether numeric comparisons against this field must be wrapped in `to_number(...)`. Narrow on
+     * purpose: wrapping a column already stored as `number` is wasted work, and the wrap is the only
+     * reason a raw-SoQL path exists. Keyed by `->value` (the Dutch source key) so a vendor
+     * enum-case rename doesn't silently disable the wrap.
      */
     private function needsToNumberWrap(BackedEnum $field, TargetDataset $dataset): bool
     {
@@ -263,17 +263,20 @@ final readonly class PlanRunner
             return false;
         }
 
-        return in_array($field->name, self::TEXT_STORED_NUMERIC_FUEL_FIELDS, true);
+        return in_array($field->value, self::TEXT_STORED_NUMERIC_FUEL_FIELDS, true);
     }
 
+    /** Strict decimal literal: optional sign, digits, optional fractional part. No `1e5`, no whitespace, no hex. */
+    private const string NUMERIC_LITERAL_PATTERN = '/^-?\d+(\.\d+)?$/';
+
     /**
-     * Guards the `whereRaw` interpolation: the value is concatenated into SoQL verbatim, so a
-     * non-numeric string here would be a SoQL-injection vector. Returns the canonical numeric
-     * representation (so `" 150 "` becomes `"150"`).
+     * Guards the `whereRaw` interpolation against SoQL injection. `is_numeric` would let scientific
+     * notation through (`"1e500"` → SoQL literal `INF`), and trims/locale forms could shift between
+     * PHP versions, so we lock to a strict decimal grammar.
      */
     private function assertNumericLiteral(BackedEnum $field, string $raw): string
     {
-        if (! is_numeric($raw)) {
+        if (preg_match(self::NUMERIC_LITERAL_PATTERN, $raw) !== 1) {
             throw new InvalidArgumentException(sprintf(
                 'Numeric comparison on field "%s" requires a numeric value, got "%s".',
                 $field->name,
@@ -281,7 +284,7 @@ final readonly class PlanRunner
             ));
         }
 
-        return (string) (float) $raw;
+        return $raw;
     }
 
     /**

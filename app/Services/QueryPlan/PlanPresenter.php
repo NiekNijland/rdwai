@@ -33,6 +33,28 @@ final class PlanPresenter
     }
 
     /**
+     * Applies `normalisePersisted` to each step's nested `plan` so pre-change QueryRun documents
+     * deserialise into the shape the frontend's `Plan` type now declares.
+     *
+     * @param  list<array<string, mixed>>|null  $steps
+     * @return list<array<string, mixed>>
+     */
+    public static function normalisePersistedSteps(?array $steps): array
+    {
+        if ($steps === null) {
+            return [];
+        }
+
+        return array_map(static function (array $step): array {
+            if (isset($step['plan']) && is_array($step['plan'])) {
+                $step['plan'] = self::normalisePersisted($step['plan']);
+            }
+
+            return $step;
+        }, $steps);
+    }
+
+    /**
      * @param  list<LedgerEntry>  $steps
      * @return list<array<string, mixed>>
      */

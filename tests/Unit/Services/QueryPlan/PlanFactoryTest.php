@@ -39,7 +39,7 @@ final class PlanFactoryTest extends TestCase
             'limit' => 25,
             'display' => 'bars',
             'explanation' => 'Counts white VWs.',
-        ]);
+        ], TargetDataset::RegisteredVehicles);
 
         self::assertCount(2, $plan->where);
         self::assertSame('Brand', $plan->where[0]->field);
@@ -72,7 +72,7 @@ final class PlanFactoryTest extends TestCase
             'select' => ['LicensePlate'],
             'aggregates' => [['fn' => 'count', 'field' => '*', 'alias' => 'n']],
             'display' => 'count',
-        ]);
+        ], TargetDataset::RegisteredVehicles);
 
         self::assertSame([], $plan->select);
         self::assertSame([], $plan->groupBy);
@@ -89,7 +89,7 @@ final class PlanFactoryTest extends TestCase
             'orderBy' => [['expr' => 'n', 'direction' => 'desc']],
             'limit' => 1,
             'display' => 'bars',
-        ]);
+        ], TargetDataset::RegisteredVehicles);
 
         self::assertSame([], $plan->select);
         self::assertEquals([new GroupKey('CommercialName', Bucket::None)], $plan->groupBy);
@@ -104,7 +104,7 @@ final class PlanFactoryTest extends TestCase
             'groupBy' => [['field' => 'PrimaryColor', 'bucket' => 'none']],
             'aggregates' => [['fn' => 'count', 'field' => '*', 'alias' => 'n']],
             'display' => 'bars',
-        ]);
+        ], TargetDataset::RegisteredVehicles);
 
         self::assertSame([], $plan->select);
         self::assertEquals(
@@ -127,7 +127,7 @@ final class PlanFactoryTest extends TestCase
             'orderBy' => [['expr' => 'RegistrationDate', 'direction' => 'asc']],
             'limit' => 60,
             'display' => 'timeseries',
-        ]);
+        ], TargetDataset::RegisteredVehicles);
 
         self::assertEquals([new GroupKey('RegistrationDate', Bucket::Month)], $plan->groupBy);
     }
@@ -140,7 +140,7 @@ final class PlanFactoryTest extends TestCase
             'select' => ['CommercialName'],
             'aggregates' => [['fn' => 'count', 'field' => '*', 'alias' => 'n']],
             'display' => 'bars',
-        ]);
+        ], TargetDataset::RegisteredVehicles);
         self::assertEquals([new GroupKey('CommercialName', Bucket::None)], $bars->groupBy);
 
         $timeseries = $factory->fromArray([
@@ -148,7 +148,7 @@ final class PlanFactoryTest extends TestCase
             'groupBy' => [['field' => 'RegistrationDate', 'bucket' => 'month']],
             'aggregates' => [['fn' => 'count', 'field' => '*', 'alias' => 'n']],
             'display' => 'timeseries',
-        ]);
+        ], TargetDataset::RegisteredVehicles);
         self::assertEquals(
             [new GroupKey('RegistrationDate', Bucket::Month)],
             $timeseries->groupBy,
@@ -166,7 +166,7 @@ final class PlanFactoryTest extends TestCase
             ],
             'aggregates' => [['fn' => 'count', 'field' => '*', 'alias' => 'n']],
             'display' => 'timeseries',
-        ]);
+        ], TargetDataset::RegisteredVehicles);
 
         // First occurrence wins so the SoQL has no duplicated date_trunc_*.
         self::assertEquals([new GroupKey('FirstAdmissionDate', Bucket::Year)], $plan->groupBy);
@@ -181,7 +181,7 @@ final class PlanFactoryTest extends TestCase
             'groupBy' => [['field' => 'FirstAdmissionDate', 'bucket' => 'year']],
             'aggregates' => [['fn' => 'count', 'field' => '*', 'alias' => 'n']],
             'display' => 'stacked_bars',
-        ]);
+        ], TargetDataset::RegisteredVehicles);
 
         self::assertSame([], $plan->select);
         self::assertEquals(
@@ -203,7 +203,7 @@ final class PlanFactoryTest extends TestCase
             'aggregates' => [],
             'limit' => 10,
             'display' => 'table',
-        ]);
+        ], TargetDataset::RegisteredVehicles);
 
         self::assertSame(['LicensePlate', 'CommercialName'], $plan->select);
         self::assertSame([], $plan->groupBy);
@@ -228,7 +228,7 @@ final class PlanFactoryTest extends TestCase
             'orderBy' => [['expr' => 'RegistrationDate', 'direction' => 'asc']],
             'limit' => 400,
             'display' => 'timeseries',
-        ]);
+        ], TargetDataset::RegisteredVehicles);
 
         self::assertEquals([new GroupKey('RegistrationDate', Bucket::Month)], $plan->groupBy);
     }
@@ -241,7 +241,7 @@ final class PlanFactoryTest extends TestCase
             'groupBy' => [['field' => 'RegistrationDate', 'bucket' => 'month']],
             'aggregates' => [['fn' => 'count', 'field' => '*', 'alias' => 'n']],
             'display' => 'timeseries',
-        ]);
+        ], TargetDataset::RegisteredVehicles);
 
         self::assertEquals([new GroupKey('RegistrationDate', Bucket::Month)], $plan->groupBy);
     }
@@ -260,7 +260,7 @@ final class PlanFactoryTest extends TestCase
             ],
             'aggregates' => [['fn' => 'count', 'field' => '*', 'alias' => 'n']],
             'display' => 'timeseries',
-        ]);
+        ], TargetDataset::RegisteredVehicles);
     }
 
     public function test_preserves_non_date_group_by_for_non_timeseries_display(): void
@@ -274,7 +274,7 @@ final class PlanFactoryTest extends TestCase
             ],
             'aggregates' => [['fn' => 'count', 'field' => '*', 'alias' => 'n']],
             'display' => 'stacked_bars',
-        ]);
+        ], TargetDataset::RegisteredVehicles);
 
         self::assertEquals(
             [
@@ -293,7 +293,7 @@ final class PlanFactoryTest extends TestCase
             'groupBy' => [['field' => 'PrimaryColor', 'bucket' => 'month']],
             'aggregates' => [['fn' => 'count', 'field' => '*', 'alias' => 'n']],
             'display' => 'bars',
-        ]);
+        ], TargetDataset::RegisteredVehicles);
 
         self::assertEquals([new GroupKey('PrimaryColor', Bucket::None)], $plan->groupBy);
     }
@@ -309,7 +309,7 @@ final class PlanFactoryTest extends TestCase
             'groupBy' => ['PrimaryColor'],
             'aggregates' => [['fn' => 'count', 'field' => '*', 'alias' => 'n']],
             'display' => 'bars',
-        ]);
+        ], TargetDataset::RegisteredVehicles);
     }
 
     public function test_clamps_limit_to_the_supported_range(): void
@@ -329,11 +329,11 @@ final class PlanFactoryTest extends TestCase
         $planEmpty = $factory->fromArray([
             'aggregates' => [['fn' => 'count', 'field' => '', 'alias' => 'n']],
             'display' => 'count',
-        ]);
+        ], TargetDataset::RegisteredVehicles);
         $planStar = $factory->fromArray([
             'aggregates' => [['fn' => 'count', 'field' => '*', 'alias' => 'n']],
             'display' => 'count',
-        ]);
+        ], TargetDataset::RegisteredVehicles);
 
         self::assertNull($planEmpty->aggregates[0]->field);
         self::assertNull($planStar->aggregates[0]->field);
@@ -374,7 +374,7 @@ final class PlanFactoryTest extends TestCase
 
         $factory->fromArray([
             'where' => [['field' => 'NotAField', 'op' => 'eq', 'value' => 'x']],
-        ]);
+        ], TargetDataset::RegisteredVehicles);
     }
 
     public function test_rejects_unknown_enum_values_with_typed_exception(): void
@@ -386,7 +386,7 @@ final class PlanFactoryTest extends TestCase
 
         $factory->fromArray([
             'where' => [['field' => 'Brand', 'op' => 'like', 'value' => 'VW']],
-        ]);
+        ], TargetDataset::RegisteredVehicles);
     }
 
     public function test_rejects_unknown_display_hint(): void
@@ -396,7 +396,7 @@ final class PlanFactoryTest extends TestCase
         $this->expectException(InvalidArgumentException::class);
         $this->expectExceptionMessage('Invalid value "treemap" for display');
 
-        $factory->fromArray(['display' => 'treemap']);
+        $factory->fromArray(['display' => 'treemap'], TargetDataset::RegisteredVehicles);
     }
 
     public function test_rejects_unknown_bucket_value(): void
@@ -410,7 +410,7 @@ final class PlanFactoryTest extends TestCase
             'groupBy' => [['field' => 'FirstAdmissionDate', 'bucket' => 'decade']],
             'aggregates' => [['fn' => 'count', 'field' => '*', 'alias' => 'n']],
             'display' => 'timeseries',
-        ]);
+        ], TargetDataset::RegisteredVehicles);
     }
 
     public function test_accepts_each_supported_display_hint(): void
@@ -422,7 +422,7 @@ final class PlanFactoryTest extends TestCase
             $plan = $factory->fromArray([
                 'display' => $hint->value,
                 'aggregates' => [['fn' => 'count', 'field' => '*', 'alias' => 'n']],
-            ]);
+            ], TargetDataset::RegisteredVehicles);
             self::assertSame($hint, $plan->display);
         }
     }
@@ -438,7 +438,7 @@ final class PlanFactoryTest extends TestCase
             'groupBy' => [],
             'aggregates' => [],
             'explanation' => 'Counts the result of 30 + 30.',
-        ]);
+        ], TargetDataset::RegisteredVehicles);
 
         self::assertSame(DisplayHint::Unsupported, $plan->display);
         self::assertSame([], $plan->where);
@@ -463,7 +463,7 @@ final class PlanFactoryTest extends TestCase
             'orderBy' => [['expr' => 'n', 'direction' => 'desc']],
             'limit' => 500,
             'explanation' => 'Not a vehicle question.',
-        ]);
+        ], TargetDataset::RegisteredVehicles);
 
         self::assertSame(DisplayHint::Unsupported, $plan->display);
         self::assertSame([], $plan->where);
@@ -487,14 +487,14 @@ final class PlanFactoryTest extends TestCase
                 ['fn' => 'count', 'field' => '*', 'alias' => 'count(*)'],
             ],
             'display' => 'count',
-        ]);
+        ], TargetDataset::RegisteredVehicles);
     }
 
     public function test_tolerates_missing_keys_with_safe_defaults(): void
     {
         $factory = $this->factory();
 
-        $plan = $factory->fromArray([]);
+        $plan = $factory->fromArray([], TargetDataset::RegisteredVehicles);
 
         self::assertSame([], $plan->where);
         self::assertSame([], $plan->select);
@@ -513,7 +513,7 @@ final class PlanFactoryTest extends TestCase
         $plan = $factory->fromArray([
             'where' => 'not-an-array',
             'select' => null,
-        ]);
+        ], TargetDataset::RegisteredVehicles);
 
         self::assertSame([], $plan->where);
         self::assertSame([], $plan->select);
@@ -529,6 +529,6 @@ final class PlanFactoryTest extends TestCase
         return $factory->fromArray([
             'limit' => $limit,
             'display' => 'table',
-        ]);
+        ], TargetDataset::RegisteredVehicles);
     }
 }

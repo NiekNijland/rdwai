@@ -22,6 +22,7 @@ use App\Services\QueryPlan\QueryProgramFactory;
 use App\Services\QueryPlan\QueryResult;
 use App\Services\QueryPlan\StepReferenceException;
 use App\Services\QueryPlan\StepReferenceResolver;
+use App\Services\QueryPlan\TargetDataset;
 use App\Services\QueryPlan\TokenUsage;
 
 class RunNaturalLanguageQuery
@@ -32,8 +33,7 @@ class RunNaturalLanguageQuery
         private readonly QueryProgramFactory $programFactory,
         private readonly StepReferenceResolver $referenceResolver,
         private readonly Derivation $derivation,
-    ) {
-    }
+    ) {}
 
     public function execute(string $userPrompt, Locale $locale): QueryResult
     {
@@ -47,7 +47,7 @@ class RunNaturalLanguageQuery
         $tokens = TokenUsage::fromUsage($response->usage);
         $estimatedCost = $this->costEstimator->estimate($model, $response->usage);
 
-        $ledger = new QueryLedger();
+        $ledger = new QueryLedger;
 
         try {
             foreach ($program->queries as $query) {
@@ -180,7 +180,9 @@ class RunNaturalLanguageQuery
         $translation = __('query.unsupported', [], $locale->value);
         $explanation = is_string($translation) ? $translation : '';
 
+        // Dataset is a placeholder — `PlanRunner::run` short-circuits on Unsupported before touching it.
         $plan = new Plan(
+            dataset: TargetDataset::RegisteredVehicles,
             where: [], select: [], groupBy: [], aggregates: [], orderBy: [],
             limit: 1, display: DisplayHint::Unsupported, explanation: $explanation,
         );

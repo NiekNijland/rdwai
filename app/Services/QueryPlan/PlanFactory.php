@@ -32,7 +32,7 @@ final class PlanFactory
     /**
      * @param  array<string, mixed>  $data
      */
-    public function fromArray(array $data, TargetDataset $dataset = TargetDataset::RegisteredVehicles): Plan
+    public function fromArray(array $data, TargetDataset $dataset): Plan
     {
         $select = $this->parseFieldList(array_values($this->arrayOrEmpty($data, 'select')), $dataset);
         $groupBy = $this->parseGroupBy(array_values($this->arrayOrEmpty($data, 'groupBy')), $dataset);
@@ -52,6 +52,7 @@ final class PlanFactory
 
         if ($display === DisplayHint::Unsupported) {
             return new Plan(
+                dataset: $dataset,
                 where: [],
                 select: [],
                 groupBy: [],
@@ -60,7 +61,6 @@ final class PlanFactory
                 limit: 1,
                 display: DisplayHint::Unsupported,
                 explanation: $explanation,
-                dataset: $dataset,
             );
         }
 
@@ -68,6 +68,7 @@ final class PlanFactory
         $groupBy = $this->normaliseTimeseriesGroupBy($groupBy, $display, $dataset);
 
         return new Plan(
+            dataset: $dataset,
             where: $where,
             select: $select,
             groupBy: $groupBy,
@@ -76,7 +77,6 @@ final class PlanFactory
             limit: isset($data['limit']) ? max(self::LIMIT_MIN, min(self::LIMIT_MAX, (int) $data['limit'])) : null,
             display: $display,
             explanation: $explanation,
-            dataset: $dataset,
         );
     }
 

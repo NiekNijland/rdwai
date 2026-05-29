@@ -32,6 +32,7 @@ use NiekNijland\RDW\Datasets\DatasetId;
 use NiekNijland\RDW\Http\Configuration as RdwConfiguration;
 use NiekNijland\RDW\Http\SocrataClient;
 use NiekNijland\RDW\Rdw;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use Throwable;
 
@@ -50,6 +51,7 @@ final class PlanRunnerTest extends TestCase
         ]);
 
         $plan = new Plan(
+            dataset: TargetDataset::RegisteredVehicles,
             where: [new WhereClause('Brand', WhereOp::Equals, 'VOLKSWAGEN')],
             // Reverse the source order to prove select-order wins.
             select: ['CommercialName', 'LicensePlate', 'RegistrationDate'],
@@ -81,6 +83,7 @@ final class PlanRunnerTest extends TestCase
         ]);
 
         $plan = new Plan(
+            dataset: TargetDataset::RegisteredVehicles,
             where: [],
             select: [],
             groupBy: [new GroupKey('PrimaryColor', Bucket::None)],
@@ -103,6 +106,7 @@ final class PlanRunnerTest extends TestCase
         $runner = $this->runnerReturning([]);
 
         $plan = new Plan(
+            dataset: TargetDataset::RegisteredVehicles,
             where: [new WhereClause('CatalogPrice', WhereOp::GreaterThan, '50000')],
             select: [],
             groupBy: [],
@@ -156,6 +160,69 @@ final class PlanRunnerTest extends TestCase
         $soql = $runner->run($plan)->soql;
         self::assertSame('to_number(nettomaximumvermogen) > 150', $soql['$where']);
         self::assertStringContainsString('count(distinct kenteken) AS n', $soql['$select']);
+    }
+
+    /**
+     * @return list<array{string}>
+     */
+    public static function nonNumericLiteralProvider(): array
+    {
+        // Each rejected literal is something `is_numeric` would have accepted (scientific, overflow,
+        // leading whitespace, hex) or hostile (SoQL fragment). The strict grammar keeps all of them
+        // out of the `whereRaw` path.
+        return [
+            ['150 OR 1=1'],
+            ['1e500'],
+            ['1e3'],
+            [' 150'],
+            ['150 '],
+            ['0x1A'],
+            ['+150'],
+            ['.5'],
+            ['5.'],
+            [''],
+        ];
+    }
+
+    #[DataProvider('nonNumericLiteralProvider')]
+    public function test_assert_numeric_literal_rejects_anything_not_strictly_decimal(string $value): void
+    {
+        $runner = $this->runnerReturning([]);
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage(sprintf('Numeric comparison on field "NetMaximumPower" requires a numeric value, got "%s".', $value));
+
+        $runner->run(new Plan(
+            dataset: TargetDataset::RegisteredVehicleFuels,
+            where: [new WhereClause('NetMaximumPower', WhereOp::GreaterThan, $value)],
+            select: [],
+            groupBy: [],
+            aggregates: [new AggregateClause(AggregateFn::Count, null, 'n')],
+            orderBy: [],
+            limit: null,
+            display: DisplayHint::Count,
+            explanation: '',
+        ));
+    }
+
+    public function test_assert_numeric_literal_preserves_a_decimal_value_verbatim(): void
+    {
+        // `150.5` should reach SoQL as `150.5`, not `150` (which a (float) round-trip would do).
+        $runner = $this->runnerReturning([]);
+
+        $where = $runner->run(new Plan(
+            dataset: TargetDataset::RegisteredVehicleFuels,
+            where: [new WhereClause('NetMaximumPower', WhereOp::GreaterThan, '150.5')],
+            select: [],
+            groupBy: [],
+            aggregates: [new AggregateClause(AggregateFn::Count, null, 'n')],
+            orderBy: [],
+            limit: null,
+            display: DisplayHint::Count,
+            explanation: '',
+        ))->soql['$where'];
+
+        self::assertSame('to_number(nettomaximumvermogen) > 150.5', $where);
     }
 
     public function test_non_numeric_value_on_text_stored_fuel_comparison_is_rejected_before_reaching_soql(): void
@@ -229,6 +296,7 @@ final class PlanRunnerTest extends TestCase
         $runner = $this->runnerReturning([]);
 
         $where = $runner->run(new Plan(
+            dataset: TargetDataset::RegisteredVehicles,
             where: [new WhereClause('CatalogPrice', WhereOp::GreaterThan, '50000')],
             select: [],
             groupBy: [],
@@ -272,6 +340,7 @@ final class PlanRunnerTest extends TestCase
         ]);
 
         $vehicles = new Plan(
+            dataset: TargetDataset::RegisteredVehicles,
             where: [],
             select: [],
             groupBy: [],
@@ -304,6 +373,7 @@ final class PlanRunnerTest extends TestCase
         $this->expectExceptionMessage('orderBy expression "totally_random_alias"');
 
         $runner->run(new Plan(
+            dataset: TargetDataset::RegisteredVehicles,
             where: [],
             select: [],
             groupBy: [new GroupKey('PrimaryColor', Bucket::None)],
@@ -323,10 +393,33 @@ final class PlanRunnerTest extends TestCase
         $this->expectExceptionMessage('Aggregate sum requires a field.');
 
         $runner->run(new Plan(
+            dataset: TargetDataset::RegisteredVehicles,
             where: [],
             select: [],
             groupBy: [],
             aggregates: [new AggregateClause(AggregateFn::Sum, null, 'total')],
+            orderBy: [],
+            limit: null,
+            display: DisplayHint::Count,
+            explanation: '',
+        ));
+    }
+
+    public function test_count_distinct_requires_a_field(): void
+    {
+        // `count_distinct(*)` is meaningless; PlanFactory passes `*` through as null and the runner
+        // must reject it rather than silently emitting `count(distinct *)`.
+        $runner = $this->runnerReturning([]);
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('Aggregate count_distinct requires a field.');
+
+        $runner->run(new Plan(
+            dataset: TargetDataset::RegisteredVehicleFuels,
+            where: [],
+            select: [],
+            groupBy: [],
+            aggregates: [new AggregateClause(AggregateFn::CountDistinct, null, 'n')],
             orderBy: [],
             limit: null,
             display: DisplayHint::Count,
@@ -343,6 +436,7 @@ final class PlanRunnerTest extends TestCase
         ]);
 
         $plan = new Plan(
+            dataset: TargetDataset::RegisteredVehicles,
             where: [
                 new WhereClause('Brand', WhereOp::Equals, 'VOLKSWAGEN'),
                 new WhereClause('CommercialName', WhereOp::Contains, 'UP'),
@@ -381,6 +475,7 @@ final class PlanRunnerTest extends TestCase
         ]);
 
         $plan = new Plan(
+            dataset: TargetDataset::RegisteredVehicles,
             where: [new WhereClause('Brand', WhereOp::Equals, 'VOLKSWAGEN')],
             select: [],
             groupBy: [
@@ -424,6 +519,7 @@ final class PlanRunnerTest extends TestCase
         $runner = $this->runnerReturning([]);
 
         $plan = new Plan(
+            dataset: TargetDataset::RegisteredVehicles,
             where: [],
             select: [],
             // Non-timeseries display so this is independent of PlanFactory's timeseries scrubber.
@@ -449,6 +545,7 @@ final class PlanRunnerTest extends TestCase
 
         // Without IS NOT NULL a top-N would lead with rows whose massa_ledig_voertuig is empty.
         $plan = new Plan(
+            dataset: TargetDataset::RegisteredVehicles,
             where: [],
             select: ['LicensePlate', 'EmptyMass'],
             groupBy: [],
@@ -479,6 +576,7 @@ final class PlanRunnerTest extends TestCase
         $runner = $this->runnerReturning([]);
 
         $plan = new Plan(
+            dataset: TargetDataset::RegisteredVehicles,
             where: [],
             select: [],
             groupBy: [new GroupKey('PrimaryColor', Bucket::None)],
@@ -500,6 +598,7 @@ final class PlanRunnerTest extends TestCase
         $runner = $this->runnerReturning([]);
 
         $plan = new Plan(
+            dataset: TargetDataset::RegisteredVehicles,
             where: [],
             select: [],
             groupBy: [new GroupKey('FirstAdmissionDate', Bucket::Year)],
@@ -521,6 +620,7 @@ final class PlanRunnerTest extends TestCase
         $runner = $this->runnerReturning([]);
 
         $plan = new Plan(
+            dataset: TargetDataset::RegisteredVehicles,
             where: [
                 new WhereClause('Brand', WhereOp::Equals, 'VOLKSWAGEN'),
                 new WhereClause('CommercialName', WhereOp::Contains, 'GOLF'),
@@ -553,6 +653,7 @@ final class PlanRunnerTest extends TestCase
         $runner = $this->runnerReturning([]);
 
         $plan = new Plan(
+            dataset: TargetDataset::RegisteredVehicles,
             where: [
                 new WhereClause('Brand', WhereOp::Equals, 'SUZUKI'),
                 new WhereClause('CommercialName', WhereOp::Contains, 'GSX-R 750'),
@@ -588,6 +689,7 @@ final class PlanRunnerTest extends TestCase
         $runner = new PlanRunner($rdw);
 
         $result = $runner->run(new Plan(
+            dataset: TargetDataset::RegisteredVehicles,
             where: [],
             select: [],
             groupBy: [],
@@ -665,6 +767,63 @@ final class PlanRunnerTest extends TestCase
         }
     }
 
+    public function test_cache_store_keys_diverge_when_the_only_difference_is_the_dataset(): void
+    {
+        // Higher-level test (cache_key_distinguishes_datasets_for_identical_soql) compares URLs;
+        // this one asserts at the store level so a regression in cacheKey() can't hide behind a
+        // matching URL after a refactor.
+        $store = new class extends ArrayStore
+        {
+            /** @var list<string> */
+            public array $keys = [];
+
+            public function put($key, $value, $seconds)
+            {
+                $this->keys[] = $key;
+
+                return parent::put($key, $value, $seconds);
+            }
+        };
+
+        $stack = HandlerStack::create(new MockHandler([
+            new Psr7Response(200, ['Content-Type' => 'application/json'], '[]'),
+            new Psr7Response(200, ['Content-Type' => 'application/json'], '[]'),
+        ]));
+        $guzzle = new GuzzleClient(['base_uri' => 'https://opendata.rdw.nl/', 'handler' => $stack]);
+        $rdw = new Rdw(http: new SocrataClient(new RdwConfiguration, $guzzle));
+
+        $runner = new PlanRunner($rdw, cache: new Repository($store), retryBackoffMs: 0);
+
+        $aggregate = [new AggregateClause(AggregateFn::Count, null, 'n')];
+        $runner->run(new Plan(
+            dataset: TargetDataset::RegisteredVehicles,
+            where: [],
+            select: [],
+            groupBy: [],
+            aggregates: $aggregate,
+            orderBy: [],
+            limit: null,
+            display: DisplayHint::Count,
+            explanation: '',
+        ));
+        $runner->run(new Plan(
+            dataset: TargetDataset::RegisteredVehicleFuels,
+            where: [],
+            select: [],
+            groupBy: [],
+            aggregates: $aggregate,
+            orderBy: [],
+            limit: null,
+            display: DisplayHint::Count,
+            explanation: '',
+        ));
+
+        self::assertCount(2, $store->keys);
+        self::assertNotSame($store->keys[0], $store->keys[1]);
+        self::assertStringContainsString(':'.DatasetId::RegisteredVehicles->value.':', $store->keys[0]);
+        self::assertStringContainsString(':'.DatasetId::RegisteredVehicleFuels->value.':', $store->keys[1]);
+    }
+
     public function test_identical_soql_is_served_from_cache_without_a_second_rdw_call(): void
     {
         // Only one response is queued, so a clean second result proves the cache served it.
@@ -721,6 +880,7 @@ final class PlanRunnerTest extends TestCase
 
         // Plain row path → short TTL.
         $runner->run(new Plan(
+            dataset: TargetDataset::RegisteredVehicles,
             where: [new WhereClause('LicensePlate', WhereOp::Equals, '12-AB-345')],
             select: ['LicensePlate'],
             groupBy: [],
@@ -768,6 +928,7 @@ final class PlanRunnerTest extends TestCase
         $runner = new PlanRunner($rdw, cache: new Repository(new ArrayStore), retryBackoffMs: 0);
 
         $result = $runner->run(new Plan(
+            dataset: TargetDataset::RegisteredVehicles,
             where: [],
             select: [],
             groupBy: [new GroupKey('PrimaryColor', Bucket::None)],
@@ -804,6 +965,7 @@ final class PlanRunnerTest extends TestCase
         ]);
 
         $result = $runner->run(new Plan(
+            dataset: TargetDataset::RegisteredVehicles,
             where: [],
             select: [],
             groupBy: [new GroupKey('PrimaryColor', Bucket::None)],
@@ -844,6 +1006,7 @@ final class PlanRunnerTest extends TestCase
         );
 
         $result = $runner->run(new Plan(
+            dataset: TargetDataset::RegisteredVehicles,
             where: [],
             select: [],
             groupBy: [new GroupKey('CommercialName', Bucket::None)],
@@ -860,6 +1023,7 @@ final class PlanRunnerTest extends TestCase
     private function colorCountPlan(): Plan
     {
         return new Plan(
+            dataset: TargetDataset::RegisteredVehicles,
             where: [],
             select: [],
             groupBy: [new GroupKey('PrimaryColor', Bucket::None)],

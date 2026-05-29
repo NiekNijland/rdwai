@@ -181,7 +181,7 @@ final class QueryController extends Controller
             'url' => $run->url,
             'rows' => $run->rows,
             'displayHint' => $run->display_hint,
-            'steps' => $run->steps ?? [],
+            'steps' => PlanPresenter::normalisePersistedSteps($run->steps),
             'presentation' => $run->presentation,
             'rating' => $run->rating,
             // Only the author sees their own free-text comment.

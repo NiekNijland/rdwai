@@ -14,6 +14,7 @@ final readonly class Plan
      * @param  list<OrderClause>  $orderBy
      */
     public function __construct(
+        public TargetDataset $dataset,
         public array $where,
         public array $select,
         public array $groupBy,
@@ -22,6 +23,5 @@ final readonly class Plan
         public ?int $limit,
         public DisplayHint $display,
         public string $explanation,
-        public TargetDataset $dataset = TargetDataset::RegisteredVehicles,
     ) {}
 }
