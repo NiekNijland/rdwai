@@ -23,7 +23,10 @@ export type DisplayHint =
 
 export type Rating = 'up' | 'down';
 
+export type TargetDataset = 'RegisteredVehicles' | 'RegisteredVehicleFuels';
+
 export type Plan = {
+    dataset: TargetDataset;
     where: WhereClause[];
     select: string[];
     groupBy: GroupKey[];

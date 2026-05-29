@@ -11,6 +11,7 @@ use App\Services\QueryPlan\GroupKey;
 use App\Services\QueryPlan\OrderDirection;
 use App\Services\QueryPlan\Plan;
 use App\Services\QueryPlan\PlanFactory;
+use App\Services\QueryPlan\TargetDataset;
 use App\Services\QueryPlan\WhereOp;
 use InvalidArgumentException;
 use NiekNijland\RDW\Schema\SchemaRegistry;
@@ -338,12 +339,38 @@ final class PlanFactoryTest extends TestCase
         self::assertNull($planStar->aggregates[0]->field);
     }
 
+    public function test_parses_a_fuels_dataset_plan_against_the_fuels_field_lookup(): void
+    {
+        $plan = $this->factory()->fromArray([
+            'where' => [['field' => 'NetMaximumPower', 'op' => 'gt', 'value' => '150']],
+            'aggregates' => [['fn' => 'count_distinct', 'field' => 'LicensePlate', 'alias' => 'n']],
+            'display' => 'count',
+            'explanation' => 'kW',
+        ], TargetDataset::RegisteredVehicleFuels);
+
+        self::assertSame(TargetDataset::RegisteredVehicleFuels, $plan->dataset);
+        self::assertSame('NetMaximumPower', $plan->where[0]->field);
+        self::assertSame(AggregateFn::CountDistinct, $plan->aggregates[0]->fn);
+    }
+
+    public function test_rejects_a_vehicles_only_field_on_a_fuels_plan(): void
+    {
+        $factory = $this->factory();
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('Unknown field "Brand" for dataset RegisteredVehicleFuels');
+
+        $factory->fromArray([
+            'where' => [['field' => 'Brand', 'op' => 'eq', 'value' => 'TOYOTA']],
+        ], TargetDataset::RegisteredVehicleFuels);
+    }
+
     public function test_rejects_unknown_field_names(): void
     {
         $factory = $this->factory();
 
         $this->expectException(InvalidArgumentException::class);
-        $this->expectExceptionMessage('Unknown RegisteredVehicleField "NotAField"');
+        $this->expectExceptionMessage('Unknown field "NotAField" for dataset RegisteredVehicles');
 
         $factory->fromArray([
             'where' => [['field' => 'NotAField', 'op' => 'eq', 'value' => 'x']],
@@ -494,7 +521,7 @@ final class PlanFactoryTest extends TestCase
 
     private function factory(): PlanFactory
     {
-        return new PlanFactory(new SchemaRegistry());
+        return new PlanFactory(new SchemaRegistry);
     }
 
     private function planWithLimit(PlanFactory $factory, ?int $limit): Plan

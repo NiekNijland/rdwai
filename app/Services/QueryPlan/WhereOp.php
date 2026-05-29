@@ -14,4 +14,5 @@ enum WhereOp: string
     case LessThanOrEqual = 'lte';
     case Contains = 'contains';
     case StartsWith = 'startsWith';
+    case In = 'in';
 }

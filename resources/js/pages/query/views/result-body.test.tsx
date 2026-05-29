@@ -8,6 +8,7 @@ import { ResultBody } from './result-body';
 
 function basePlan(display: DisplayHint): Plan {
     return {
+        dataset: 'RegisteredVehicles',
         where: [],
         select: [],
         groupBy: [],

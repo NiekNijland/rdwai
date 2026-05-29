@@ -6,6 +6,8 @@ namespace App\Services\QueryPlan;
 
 final class StepReferenceResolver
 {
+    public const int LIST_LIMIT = 1000;
+
     public function resolve(Plan $plan, QueryLedger $ledger): Plan
     {
         $where = array_map(
@@ -22,6 +24,7 @@ final class StepReferenceResolver
             limit: $plan->limit,
             display: $plan->display,
             explanation: $plan->explanation,
+            dataset: $plan->dataset,
         );
     }
 
@@ -32,21 +35,25 @@ final class StepReferenceResolver
             return $clause;
         }
 
+        if ($clause->op === WhereOp::In) {
+            return new WhereClause(
+                field: $clause->field,
+                op: $clause->op,
+                value: $clause->value,
+                values: $this->resolveListReference($reference, $ledger),
+            );
+        }
+
         return new WhereClause(
             field: $clause->field,
             op: $clause->op,
-            value: $this->resolveReference($reference, $ledger),
+            value: $this->resolveScalarReference($reference, $ledger),
         );
     }
 
-    private function resolveReference(StepReference $reference, QueryLedger $ledger): string
+    private function resolveScalarReference(StepReference $reference, QueryLedger $ledger): string
     {
-        $entry = $ledger->get($reference->queryId);
-        if ($entry === null) {
-            throw new StepReferenceException(sprintf('Reference to unknown query "%s".', $reference->queryId));
-        }
-
-        $rows = $entry->result->rows;
+        $rows = $this->referencedRows($reference, $ledger);
         if (count($rows) !== 1) {
             throw new StepReferenceException(sprintf(
                 'Reference "%s" expects query "%s" to return exactly one row, got %d.',
@@ -56,16 +63,7 @@ final class StepReferenceResolver
             ));
         }
 
-        $row = $rows[0];
-        if (! array_key_exists($reference->field, $row)) {
-            throw new StepReferenceException(sprintf(
-                'Query "%s" did not return column "%s".',
-                $reference->queryId,
-                $reference->field,
-            ));
-        }
-
-        $value = $row[$reference->field];
+        $value = $this->columnValue($rows[0], $reference);
         if ($value === null) {
             throw new StepReferenceException(sprintf(
                 'Column "%s" of query "%s" is null.',
@@ -75,5 +73,83 @@ final class StepReferenceResolver
         }
 
         return (string) $value;
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function resolveListReference(StepReference $reference, QueryLedger $ledger): array
+    {
+        $rows = $this->referencedRows($reference, $ledger);
+        if ($rows === []) {
+            throw new StepReferenceException(sprintf(
+                'Reference "%s" expects query "%s" to return at least one row.',
+                $reference->token(),
+                $reference->queryId,
+            ));
+        }
+
+        if (count($rows) >= self::LIST_LIMIT) {
+            throw new StepReferenceException(sprintf(
+                'Reference "%s" returned %d rows, which saturates the %d-row cross-dataset limit; ask a more specific question.',
+                $reference->token(),
+                count($rows),
+                self::LIST_LIMIT,
+            ));
+        }
+
+        $values = [];
+        $seen = [];
+        foreach ($rows as $row) {
+            $value = $this->columnValue($row, $reference);
+            if ($value === null) {
+                continue;
+            }
+            $stringified = (string) $value;
+            if (isset($seen[$stringified])) {
+                continue;
+            }
+            $seen[$stringified] = true;
+            $values[] = $stringified;
+        }
+
+        if ($values === []) {
+            throw new StepReferenceException(sprintf(
+                'Column "%s" of query "%s" is null on every row.',
+                $reference->field,
+                $reference->queryId,
+            ));
+        }
+
+        return $values;
+    }
+
+    /**
+     * @return list<array<string, mixed>>
+     */
+    private function referencedRows(StepReference $reference, QueryLedger $ledger): array
+    {
+        $entry = $ledger->get($reference->queryId);
+        if ($entry === null) {
+            throw new StepReferenceException(sprintf('Reference to unknown query "%s".', $reference->queryId));
+        }
+
+        return $entry->result->rows;
+    }
+
+    /**
+     * @param  array<string, mixed>  $row
+     */
+    private function columnValue(array $row, StepReference $reference): mixed
+    {
+        if (! array_key_exists($reference->field, $row)) {
+            throw new StepReferenceException(sprintf(
+                'Query "%s" did not return column "%s".',
+                $reference->queryId,
+                $reference->field,
+            ));
+        }
+
+        return $row[$reference->field];
     }
 }

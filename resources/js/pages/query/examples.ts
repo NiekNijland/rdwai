@@ -2,9 +2,10 @@
 // the typewriter placeholder cycles the flat SUGGESTIONS_* lists, and the
 // discover cards pick one entry per visualization from DISCOVER_POOL.
 
-// Curated against the planner's capabilities (single RegisteredVehicles
-// dataset, no location/fuel fields). Each item maps to a clean display hint:
-// count, bars, timeseries, table, record, stats, or histogram.
+// Curated against the planner's capabilities (RegisteredVehicles dataset for
+// general vehicle facts; RegisteredVehicleFuels for engine power, CO2, fuel
+// consumption). Each item maps to a clean display hint: count, bars,
+// timeseries, table, record, stats, or histogram.
 export const SUGGESTIONS_NL: readonly string[] = [
     'Hoeveel Tesla Model 3 zijn er in Nederland?',
     'Hoeveel Ferrari’s zijn er geregistreerd?',
@@ -13,6 +14,8 @@ export const SUGGESTIONS_NL: readonly string[] = [
     'Hoeveel Porsche 911 zijn er geregistreerd?',
     'Hoeveel campers staan er op kenteken?',
     'Hoeveel motorfietsen zwaarder dan 1000 cc?',
+    'Welk percentage auto’s heeft meer dan 150 kW vermogen?',
+    'Hoeveel auto’s stoten meer dan 200 g/km CO2 uit?',
     'Hoeveel oranje voertuigen zijn er?',
     'Hoeveel Fiat 500’s uit 2015 zijn er?',
     'Hoeveel voertuigen ouder dan 30 jaar zijn er?',
@@ -57,6 +60,8 @@ export const SUGGESTIONS_EN: readonly string[] = [
     'How many Porsche 911 are registered?',
     'How many campers are registered?',
     'How many motorcycles over 1000 cc?',
+    'What percentage of cars have more than 150 kW of engine power?',
+    'How many cars emit more than 200 g/km of CO2?',
     'How many orange vehicles are there?',
     'How many 2015 Fiat 500s are there?',
     'How many vehicles over 30 years old?',

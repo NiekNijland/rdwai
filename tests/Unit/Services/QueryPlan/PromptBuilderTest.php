@@ -139,6 +139,34 @@ final class PromptBuilderTest extends TestCase
         self::assertStringContainsString('groupShare divides by the total over every returned group', $prompt);
     }
 
+    public function test_prompt_documents_both_datasets_and_the_kw_example(): void
+    {
+        $prompt = $this->builder()->systemPrompt(Locale::English);
+
+        self::assertStringContainsString('RegisteredVehicleFuels', $prompt);
+        self::assertStringContainsString('NetMaximumPower', $prompt);
+        // The fuels granularity rule and the per-vehicle counting tool.
+        self::assertStringContainsString('count_distinct(LicensePlate)', $prompt);
+        // The worked kW example threads both datasets through a percentage derive.
+        self::assertStringContainsString('What percentage of cars have more than 150 kW', $prompt);
+        self::assertStringContainsString('q1 (dataset: RegisteredVehicleFuels)', $prompt);
+        self::assertStringContainsString('derive percentage(numerator q1.n, denominator q2.n)', $prompt);
+    }
+
+    public function test_prompt_documents_cross_dataset_filtering_via_in_op(): void
+    {
+        $prompt = $this->builder()->systemPrompt(Locale::English);
+
+        // The IN operator is documented, including the 1000-plate cap.
+        self::assertStringContainsString('`in`', $prompt);
+        self::assertStringContainsString('1000', $prompt);
+        // Worked example covers a low-cardinality brand.
+        self::assertStringContainsString('How many Ferraris have more than 150 kW', $prompt);
+        self::assertStringContainsString('LicensePlate in {{q1.LicensePlate}}', $prompt);
+        // High-cardinality brands are called out as refusals.
+        self::assertStringContainsString('Toyotas over 150 kW', $prompt);
+    }
+
     public function test_prompt_picks_explanation_language_from_locale(): void
     {
         $builder = $this->builder();
@@ -155,6 +183,6 @@ final class PromptBuilderTest extends TestCase
 
     private function builder(): PromptBuilder
     {
-        return new PromptBuilder(new SchemaRegistry());
+        return new PromptBuilder(new SchemaRegistry);
     }
 }

@@ -38,6 +38,7 @@ final class PlanPresenterTest extends TestCase
         $array = PlanPresenter::toArray($plan);
 
         self::assertSame([
+            'dataset' => 'RegisteredVehicles',
             'where' => [['field' => 'Brand', 'op' => 'eq', 'value' => 'VW']],
             'select' => ['Brand'],
             'groupBy' => [
@@ -84,6 +85,7 @@ final class PlanPresenterTest extends TestCase
     public function test_normalise_persisted_passes_new_shape_through_unchanged(): void
     {
         $current = [
+            'dataset' => 'RegisteredVehicles',
             'groupBy' => [
                 ['field' => 'PrimaryColor', 'bucket' => 'none'],
                 ['field' => 'RegistrationDate', 'bucket' => 'month'],
@@ -91,5 +93,23 @@ final class PlanPresenterTest extends TestCase
         ];
 
         self::assertSame($current, PlanPresenter::normalisePersisted($current));
+    }
+
+    public function test_normalise_persisted_defaults_dataset_for_pre_change_documents(): void
+    {
+        $legacy = [
+            'where' => [],
+            'select' => [],
+            'groupBy' => [['field' => 'PrimaryColor', 'bucket' => 'none']],
+            'aggregates' => [],
+            'orderBy' => [],
+            'limit' => null,
+            'display' => 'bars',
+            'explanation' => '',
+        ];
+
+        $normalised = PlanPresenter::normalisePersisted($legacy);
+
+        self::assertSame('RegisteredVehicles', $normalised['dataset']);
     }
 }

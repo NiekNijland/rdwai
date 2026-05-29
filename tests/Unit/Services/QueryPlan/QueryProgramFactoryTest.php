@@ -125,9 +125,98 @@ final class QueryProgramFactoryTest extends TestCase
         ]);
     }
 
+    public function test_rejects_a_query_with_missing_dataset(): void
+    {
+        // The JSON schema marks `dataset` as required; the factory must enforce that instead of
+        // silently defaulting, otherwise a missing dataset would surface as a confusing
+        // "Unknown field …" error downstream.
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('Query "q1" must declare a dataset.');
+
+        $query = $this->lookupQuery('q1');
+        unset($query['dataset']);
+
+        $this->factory()->fromArray([
+            'queries' => [$query],
+            'presentation' => $this->presentation('q1'),
+        ]);
+    }
+
+    public function test_rejects_a_query_with_an_unknown_dataset(): void
+    {
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('Unknown dataset "RegisteredVehicleBananas" on query "q1".');
+
+        $query = $this->lookupQuery('q1');
+        $query['dataset'] = 'RegisteredVehicleBananas';
+
+        $this->factory()->fromArray([
+            'queries' => [$query],
+            'presentation' => $this->presentation('q1'),
+        ]);
+    }
+
+    public function test_step_reference_field_is_resolved_against_the_referenced_querys_dataset(): void
+    {
+        // q1 lives on the fuels dataset and selects NetMaximumPower (a fuel-only field).
+        // q2 references {{q1.NetMaximumPower}}. The validator must check NetMaximumPower
+        // against the fuels lookup — not against q2's own dataset, which doesn't have it.
+        $program = $this->factory()->fromArray([
+            'queries' => [
+                [
+                    'id' => 'q1',
+                    'dataset' => 'RegisteredVehicleFuels',
+                    'where' => [['field' => 'LicensePlate', 'op' => 'eq', 'value' => '1-ZTZ-08']],
+                    'select' => ['NetMaximumPower'],
+                    'groupBy' => [], 'aggregates' => [], 'orderBy' => [],
+                    'limit' => 1, 'display' => 'record', 'explanation' => 'lookup',
+                ],
+                [
+                    'id' => 'q2',
+                    'dataset' => 'RegisteredVehicles',
+                    'where' => [['field' => 'LicensePlate', 'op' => 'eq', 'value' => '{{q1.NetMaximumPower}}']],
+                    'select' => [], 'groupBy' => [],
+                    'aggregates' => [['fn' => 'count', 'field' => '*', 'alias' => 'n']],
+                    'orderBy' => [], 'limit' => 1, 'display' => 'count', 'explanation' => 'x',
+                ],
+            ],
+            'presentation' => $this->presentation('q2'),
+        ]);
+
+        self::assertCount(2, $program->queries);
+    }
+
+    public function test_step_reference_rejects_a_field_missing_from_the_referenced_dataset(): void
+    {
+        $this->expectException(InvalidArgumentException::class);
+
+        $this->factory()->fromArray([
+            'queries' => [
+                [
+                    'id' => 'q1',
+                    'dataset' => 'RegisteredVehicleFuels',
+                    'where' => [['field' => 'LicensePlate', 'op' => 'eq', 'value' => '1-ZTZ-08']],
+                    'select' => ['NetMaximumPower'],
+                    'groupBy' => [], 'aggregates' => [], 'orderBy' => [],
+                    'limit' => 1, 'display' => 'record', 'explanation' => 'lookup',
+                ],
+                [
+                    'id' => 'q2',
+                    'dataset' => 'RegisteredVehicles',
+                    // PrimaryColor lives on RegisteredVehicles, NOT RegisteredVehicleFuels.
+                    'where' => [['field' => 'LicensePlate', 'op' => 'eq', 'value' => '{{q1.PrimaryColor}}']],
+                    'select' => [], 'groupBy' => [],
+                    'aggregates' => [['fn' => 'count', 'field' => '*', 'alias' => 'n']],
+                    'orderBy' => [], 'limit' => 1, 'display' => 'count', 'explanation' => 'x',
+                ],
+            ],
+            'presentation' => $this->presentation('q2'),
+        ]);
+    }
+
     private function factory(): QueryProgramFactory
     {
-        return new QueryProgramFactory(new PlanFactory(new SchemaRegistry()), new PresentationFactory());
+        return new QueryProgramFactory(new PlanFactory(new SchemaRegistry), new PresentationFactory);
     }
 
     /**
@@ -137,6 +226,7 @@ final class QueryProgramFactoryTest extends TestCase
     {
         return [
             'id' => $id,
+            'dataset' => 'RegisteredVehicles',
             'where' => [['field' => 'LicensePlate', 'op' => 'eq', 'value' => '1-ZTZ-08']],
             'select' => ['Brand', 'CommercialName'],
             'groupBy' => [], 'aggregates' => [], 'orderBy' => [],
@@ -151,6 +241,7 @@ final class QueryProgramFactoryTest extends TestCase
     {
         return [
             'id' => $id,
+            'dataset' => 'RegisteredVehicles',
             'where' => [
                 ['field' => 'Brand', 'op' => 'eq', 'value' => "{{{$refId}.Brand}}"],
                 ['field' => 'CommercialName', 'op' => 'eq', 'value' => "{{{$refId}.CommercialName}}"],

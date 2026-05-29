@@ -8,6 +8,7 @@ import { CountView } from './count-view';
 
 function countPlan(): Plan {
     return {
+        dataset: 'RegisteredVehicles',
         where: [],
         select: [],
         groupBy: [],

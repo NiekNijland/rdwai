@@ -8,6 +8,7 @@ use Illuminate\Contracts\JsonSchema\JsonSchema;
 use Illuminate\JsonSchema\Types\Type;
 use NiekNijland\RDW\Datasets\DatasetId;
 use NiekNijland\RDW\Fields\RegisteredVehicleField;
+use NiekNijland\RDW\Fields\RegisteredVehicleFuelField;
 use NiekNijland\RDW\Schema\CastType;
 use NiekNijland\RDW\Schema\DatasetSchema;
 use NiekNijland\RDW\Schema\FieldDescriptor;
@@ -20,11 +21,17 @@ final class PlanSchema
      */
     public static function build(JsonSchema $schema): array
     {
-        $datasetSchema = app(SchemaRegistry::class)->get(DatasetId::RegisteredVehicles);
+        $registry = app(SchemaRegistry::class);
+        $vehiclesSchema = $registry->get(DatasetId::RegisteredVehicles);
 
-        $fieldNames = array_map(static fn (RegisteredVehicleField $f): string => $f->name, RegisteredVehicleField::cases());
+        $fieldNames = array_values(array_unique([
+            ...array_map(static fn (RegisteredVehicleField $f): string => $f->name, RegisteredVehicleField::cases()),
+            ...array_map(static fn (RegisteredVehicleFuelField $f): string => $f->name, RegisteredVehicleFuelField::cases()),
+        ]));
 
-        $fieldDescription = 'English field name on the RegisteredVehicle dataset (PascalCase, e.g. Brand, CommercialName, PrimaryColor).';
+        $fieldDescription = 'English field name (PascalCase). The enum lists every field across both datasets, but each value must belong to the dataset declared on this query — otherwise the server rejects the plan with `Unknown field "X" for dataset Y`.';
+
+        $datasetNames = array_map(static fn (TargetDataset $d): string => $d->value, TargetDataset::cases());
 
         $whereItem = $schema->object([
             'field' => $schema->string()->enum($fieldNames)->description($fieldDescription)->required(),
@@ -32,13 +39,13 @@ final class PlanSchema
                 ->enum(array_map(static fn (WhereOp $o): string => $o->value, WhereOp::cases()))
                 ->description('Comparison operator.')
                 ->required(),
-            'value' => $schema->string()->description(self::valueDescription($datasetSchema))->required(),
+            'value' => $schema->string()->description(self::valueDescription($vehiclesSchema))->required(),
         ]);
 
         $aggregateItem = $schema->object([
             'fn' => $schema->string()
                 ->enum(array_map(static fn (AggregateFn $f): string => $f->value, AggregateFn::cases()))
-                ->description('Aggregate function.')
+                ->description('Aggregate function. Use count_distinct for per-vehicle counts on RegisteredVehicleFuels (which has multiple rows per vehicle).')
                 ->required(),
             'field' => $schema->string()
                 ->enum([...$fieldNames, '*'])
@@ -63,6 +70,10 @@ final class PlanSchema
         ]);
 
         return [
+            'dataset' => $schema->string()
+                ->enum($datasetNames)
+                ->description('Which RDW dataset this query runs against. RegisteredVehicles for general vehicle facts; RegisteredVehicleFuels for engine power (kW), CO2 emissions, fuel consumption, noise, and emission class.')
+                ->required(),
             'where' => $schema->array()
                 ->description('List of filters. Combined with AND.')
                 ->items($whereItem)

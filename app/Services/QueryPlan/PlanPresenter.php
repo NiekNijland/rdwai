@@ -11,7 +11,7 @@ final class PlanPresenter
     /**
      * Read-path shim so pre-Bucket QueryRun documents come out in the current {field, bucket} groupBy shape.
      *
-     * @param array<string, mixed> $plan
+     * @param  array<string, mixed>  $plan
      * @return array<string, mixed>
      */
     public static function normalisePersisted(array $plan): array
@@ -25,11 +25,15 @@ final class PlanPresenter
             );
         }
 
+        if (! isset($plan['dataset'])) {
+            $plan['dataset'] = TargetDataset::RegisteredVehicles->value;
+        }
+
         return $plan;
     }
 
     /**
-     * @param list<LedgerEntry> $steps
+     * @param  list<LedgerEntry>  $steps
      * @return list<array<string, mixed>>
      */
     public static function stepsToArray(array $steps): array
@@ -67,11 +71,12 @@ final class PlanPresenter
     public static function toArray(Plan $plan): array
     {
         return [
-            'where' => array_map(static fn (WhereClause $c): array => [
-                'field' => $c->field,
-                'op' => $c->op->value,
-                'value' => $c->value,
-            ], $plan->where),
+            'dataset' => $plan->dataset->value,
+            'where' => array_map(static fn (WhereClause $c): array => $c->values === []
+                ? ['field' => $c->field, 'op' => $c->op->value, 'value' => $c->value]
+                : ['field' => $c->field, 'op' => $c->op->value, 'value' => $c->value, 'values' => $c->values],
+                $plan->where,
+            ),
             'select' => $plan->select,
             'groupBy' => array_map(static fn (GroupKey $k): array => [
                 'field' => $k->field,

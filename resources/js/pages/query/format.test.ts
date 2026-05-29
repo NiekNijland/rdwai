@@ -23,6 +23,7 @@ const identity = (key: string): string => key;
 
 function planWithGroupBy(groupBy: Plan['groupBy']): Plan {
     return {
+        dataset: 'RegisteredVehicles',
         where: [],
         select: [],
         groupBy,
@@ -141,6 +142,7 @@ describe('valueAxisLabel', () => {
 
     function planWithAggregate(aggregate: Plan['aggregates'][number]): Plan {
         return {
+            dataset: 'RegisteredVehicles',
             where: [],
             select: [],
             groupBy: [],

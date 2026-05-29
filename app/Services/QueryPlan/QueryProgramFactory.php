@@ -15,11 +15,10 @@ final class QueryProgramFactory
     public function __construct(
         private readonly PlanFactory $planFactory,
         private readonly PresentationFactory $presentationFactory,
-    ) {
-    }
+    ) {}
 
     /**
-     * @param array<string, mixed> $data
+     * @param  array<string, mixed>  $data
      */
     public function fromArray(array $data): QueryProgram
     {
@@ -39,6 +38,8 @@ final class QueryProgramFactory
         $queries = [];
         /** @var list<string> $seenIds */
         $seenIds = [];
+        /** @var array<string, TargetDataset> $datasetById */
+        $datasetById = [];
 
         foreach ($rawQueries as $rawQuery) {
             if (! is_array($rawQuery)) {
@@ -46,12 +47,14 @@ final class QueryProgramFactory
             }
 
             $id = $this->parseId($rawQuery['id'] ?? null, $seenIds);
-            $plan = $this->planFactory->fromArray($rawQuery);
+            $dataset = $this->parseDataset($rawQuery['dataset'] ?? null, $id);
+            $plan = $this->planFactory->fromArray($rawQuery, $dataset);
 
-            $this->assertReferencesPointBackward($plan, $seenIds, $id);
+            $this->assertReferencesPointBackward($plan, $seenIds, $id, $datasetById);
 
             $queries[] = new ProgramQuery($id, $plan);
             $seenIds[] = $id;
+            $datasetById[$id] = $dataset;
         }
 
         $presentation = $this->presentationFactory->fromArray(
@@ -63,7 +66,7 @@ final class QueryProgramFactory
     }
 
     /**
-     * @param list<string> $seenIds
+     * @param  list<string>  $seenIds
      */
     private function parseId(mixed $raw, array $seenIds): string
     {
@@ -78,10 +81,26 @@ final class QueryProgramFactory
         return $id;
     }
 
+    private function parseDataset(mixed $raw, string $queryId): TargetDataset
+    {
+        $value = (string) ($raw ?? '');
+        if ($value === '') {
+            throw new InvalidArgumentException(sprintf('Query "%s" must declare a dataset.', $queryId));
+        }
+
+        $case = TargetDataset::tryFrom($value);
+        if ($case === null) {
+            throw new InvalidArgumentException(sprintf('Unknown dataset "%s" on query "%s".', $value, $queryId));
+        }
+
+        return $case;
+    }
+
     /**
-     * @param list<string> $earlierIds
+     * @param  list<string>  $earlierIds
+     * @param  array<string, TargetDataset>  $datasetById
      */
-    private function assertReferencesPointBackward(Plan $plan, array $earlierIds, string $selfId): void
+    private function assertReferencesPointBackward(Plan $plan, array $earlierIds, string $selfId, array $datasetById): void
     {
         foreach ($plan->where as $clause) {
             $reference = StepReference::tryParse($clause->value);
@@ -99,18 +118,20 @@ final class QueryProgramFactory
                     $reference->queryId,
                 ));
             }
-            if (RegisteredVehicleFieldLookup::tryGet($reference->field) === null) {
+            $referencedDataset = $datasetById[$reference->queryId];
+            if (FieldLookup::tryGet($referencedDataset, $reference->field) === null) {
                 throw new InvalidArgumentException(sprintf(
-                    'Reference "%s" names an unknown field "%s".',
+                    'Reference "%s" names field "%s", which does not exist on dataset %s.',
                     $reference->token(),
                     $reference->field,
+                    $referencedDataset->value,
                 ));
             }
         }
     }
 
     /**
-     * @param array<string, mixed> $data
+     * @param  array<string, mixed>  $data
      * @return list<mixed>
      */
     private function arrayOrEmpty(array $data, string $key): array

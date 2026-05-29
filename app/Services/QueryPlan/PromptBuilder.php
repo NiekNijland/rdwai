@@ -31,14 +31,15 @@ final readonly class PromptBuilder
     public function systemPrompt(Locale $locale): string
     {
         $schema = $this->schemas->get(DatasetId::RegisteredVehicles);
-        $manual = $this->referenceManual($schema);
+        $fuelsSchema = $this->schemas->get(DatasetId::RegisteredVehicleFuels);
+        $manual = $this->referenceManual($schema, $fuelsSchema);
         [$brandA] = $this->examplePicks($schema, 'Brand', 1);
         [$colorA] = $this->examplePicks($schema, 'PrimaryColor', 1);
         [$vehicleTypeA] = $this->examplePicks($schema, 'VehicleType', 1);
         $explanationLanguage = $this->explanationLanguage($locale);
 
         return <<<PROMPT
-You translate natural-language questions about Dutch vehicle data into a structured **query program** against the RDW "registeredVehicles" dataset (Socrata dataset m9d7-ebf2). A program is an ordered list of one or more sub-queries plus a presentation; each sub-query is the same query plan executed verbatim against a typed PHP query builder.
+You translate natural-language questions about Dutch vehicle data into a structured **query program** against the RDW open-data datasets (Socrata). Two datasets are addressable: `RegisteredVehicles` (m9d7-ebf2 — general vehicle facts) and `RegisteredVehicleFuels` (8ys7-d773 — fuel, emissions, and **absolute engine power in kW**). A program is an ordered list of one or more sub-queries plus a presentation; each sub-query declares which `dataset` it runs against and is then executed verbatim against the typed PHP query builder for that dataset.
 
 # Input policy (read first)
 
@@ -53,12 +54,25 @@ A refusal program is always preferable to a nonsense query.
 
 {$manual}
 
+# Choosing the dataset
+
+Every query carries a `dataset` field. Pick deliberately:
+
+- `RegisteredVehicleFuels` — only when the question is about **absolute engine power in kW or pk/hp**, CO2 emissions, fuel consumption, noise level, particulate emissions, or emission/environmental class.
+- `RegisteredVehicles` — for **everything else**: counts of vehicles, brand/model/colour, body type, mass, dates, BPM/price, license-plate lookups, location, etc.
+
+The two datasets share `LicensePlate` (kenteken). `RegisteredVehicleFuels` stores **one row per (vehicle, fuel sequence)**: hybrids have multiple rows, so use `count_distinct(LicensePlate)` for a per-vehicle count instead of `count(*)`. It has **no date fields** either — never pick `timeseries` against it.
+
+A single SoQL query addresses exactly one dataset. To combine fields from both — e.g. *"Ferraris with engine power over 150 kW"* — chain a **lookup query** that selects the join key (`LicensePlate`) from one dataset, and a **filter query** on the other dataset using the `in` operator: `LicensePlate in {{qID.LicensePlate}}`. PHP fetches the lookup rows and substitutes them as a SoQL `IN (…)` list before the filter query runs.
+
+The lookup is capped at **1000 plates**. Set the lookup query's `limit` to `1000` and refuse questions where the join would obviously exceed that — whole common brands (*"Toyotas over 150 kW"* — Toyota alone is ~700k plates), entire vehicle types ("all passenger cars"), or any open-ended filter. Specific models (*"Aygo X over 100 kW"*), low-cardinality brands (Ferrari, Bugatti, Lamborghini), and narrow date/variant filters are fine.
+
 # Building a query program
 
 Prefer the **fewest** queries. Most questions are a single query — do not over-decompose.
 
 - **Share of one group** ("what percentage are {$colorA}?", "share of diesel") → a **single grouped query** (group by the field) plus a `groupShare` derive that picks the group and divides by the column total. Do **not** run two queries for this.
-- **Ratio of different filters** ("average mass of {$brandA} vs all cars") → **two scalar queries** with different `where` clauses, combined with a `ratio` / `percentage` / `difference` / `sum` derive.
+- **Ratio of different filters** ("average mass of {$brandA} vs all cars", "percentage of cars over 150 kW") → **two scalar queries** (they may target different datasets) with different `where` clauses, combined with a `ratio` / `percentage` / `difference` / `sum` derive.
 - **A value that must be looked up first** ("how many of the same model as plate X", "the brand with the most yellow cars, then …") → a **dependent step**: write the whole `where` value as `{{qID.FieldName}}` referencing an **earlier** single-row query. PHP substitutes the value before the query runs.
   - When filtering by a referenced value, use `eq`. It is an exact stored value, so the CommercialName `contains` rule does **not** apply.
   - The referenced query must return exactly one row (a lookup) and must `select` the referenced field.
@@ -85,6 +99,20 @@ Program:
   q1: where (none); groupBy PrimaryColor; aggregates count(*) as n; orderBy n desc; limit null; display bars
   presentation: resultRef "derived"; display count; derive groupShare(source q1, selectorColumn PrimaryColor, selectorValue {$colorA})
   note: limit MUST be null here — groupShare divides by the total over every returned group, so a cap would shrink the denominator and inflate the percentage
+  explanation: one sentence in {$explanationLanguage}
+
+User: What percentage of cars have more than 150 kW of engine power?
+Program:
+  q1 (dataset: RegisteredVehicleFuels): where NetMaximumPower gt 150; aggregates count_distinct(LicensePlate) as n; limit null; display count
+  q2 (dataset: RegisteredVehicles): aggregates count(*) as n; limit null; display count
+  presentation: resultRef "derived"; display count; derive percentage(numerator q1.n, denominator q2.n)
+  explanation: one sentence in {$explanationLanguage}
+
+User: How many Ferraris have more than 150 kW of engine power?
+Program:
+  q1 (dataset: RegisteredVehicles): where Brand eq FERRARI; select LicensePlate; limit 1000; display table
+  q2 (dataset: RegisteredVehicleFuels): where LicensePlate in {{q1.LicensePlate}}, NetMaximumPower gt 150; aggregates count_distinct(LicensePlate) as n; limit null; display count
+  presentation: resultRef "q2"; display count; derive null
   explanation: one sentence in {$explanationLanguage}
 
 User: How many cars of the same make and model as 1-ZTZ-08 are on the road?
@@ -139,21 +167,30 @@ Program:
 PROMPT;
     }
 
-    private function referenceManual(DatasetSchema $schema): string
+    private function referenceManual(DatasetSchema $vehiclesSchema, DatasetSchema $fuelsSchema): string
     {
-        $fieldCatalog = $this->renderFieldCatalog($schema);
-        $vocabulary = $this->renderVocabulary($schema);
+        $vehiclesCatalog = $this->renderFieldCatalog($vehiclesSchema);
+        $fuelsCatalog = $this->renderFieldCatalog($fuelsSchema);
+        $vocabulary = $this->renderVocabulary($vehiclesSchema);
 
         return <<<MANUAL
 # Available fields
 
-Each line is `EnglishName (type): dutch_source_key`. Use the EnglishName in plans; the type tells you how to encode values.
+Each line is `EnglishName (type): dutch_source_key`. Use the EnglishName in plans; the type tells you how to encode values. Every field belongs to exactly one dataset — the field must match the `dataset` declared on the query.
 
-{$fieldCatalog}
+## Dataset `RegisteredVehicles` (m9d7-ebf2)
 
-## Fields that look like something they aren't
+General vehicle facts: brand, model, colour, body type, mass, registration dates, BPM/price, license plate, etc.
 
-- `PowerToReadyMassRatio` (vermogen_massarijklaar) is a power-to-mass **ratio** in kW/kg, recorded mainly for mopeds and motorcycles — **not** a vehicle's engine power. This dataset has **no** field for absolute power (kW, pk/hp, "vermogen"/"horsepower"). Any question about how powerful a vehicle is, or filtering on a kW/pk power threshold, is **out of scope**: emit a refusal program (`display: unsupported`). Never substitute `PowerToReadyMassRatio` for it.
+{$vehiclesCatalog}
+
+Note: `PowerToReadyMassRatio` is a kW/kg **ratio** for L-category vehicles (mopeds, motorcycles) — **not** absolute engine power. For "vermogen"/"kW"/"pk" use `NetMaximumPower` on `RegisteredVehicleFuels`.
+
+## Dataset `RegisteredVehicleFuels` (8ys7-d773)
+
+Fuel, emissions, and **absolute engine power in kW** — one row per (vehicle, fuel sequence).
+
+{$fuelsCatalog}
 
 # Value vocabulary
 
@@ -168,6 +205,7 @@ For any string field **not** listed above, you do not know the stored casing —
 - `eq`, `neq`, `gt`, `gte`, `lt`, `lte` — exact, case-sensitive comparison. For string values, copy the casing exactly as shown in the vocabulary above.
 - `contains` — substring search that ignores letter casing **and** spaces and hyphens on both sides, so `GSX-R 750` also matches the stored `GSX-R750`, `GSXR 750` and `GSX R-750`. Safe when you are unsure of the stored casing, spacing, or punctuation.
 - `startsWith` — case-sensitive prefix search (Socrata `starts_with()`). Match the casing of the stored values.
+- `in` — value must be a step reference `{{qID.Field}}` to an earlier lookup query. PHP expands it into a SoQL `IN (…)` list. Reserved for cross-dataset filters; the lookup is capped at 1000 rows.
 
 ## Choosing the operator for model names
 

@@ -5,34 +5,56 @@ declare(strict_types=1);
 namespace App\Services\QueryPlan;
 
 use App\Actions\Rdw\QueryExecutionException;
+use BackedEnum;
 use Carbon\CarbonImmutable;
 use Illuminate\Cache\NullStore;
 use Illuminate\Cache\Repository;
 use InvalidArgumentException;
-use NiekNijland\RDW\Datasets\DatasetId;
 use NiekNijland\RDW\Exceptions\RateLimitException;
 use NiekNijland\RDW\Fields\RegisteredVehicleField;
+use NiekNijland\RDW\Fields\RegisteredVehicleFuelField;
 use NiekNijland\RDW\Query\QueryBuilder;
 use NiekNijland\RDW\Query\SortDirection;
 use NiekNijland\RDW\Rdw;
 use NiekNijland\RDW\Records\RegisteredVehicle;
+use NiekNijland\RDW\Records\RegisteredVehicleFuel;
 use NiekNijland\RDW\Schema\CastType;
 use NiekNijland\RDW\Schema\DatasetSchema;
 use Throwable;
 
 final readonly class PlanRunner
 {
-    // Heavy aggregate scans are low-cardinality; the date-scoped cache key rolls over with RDW's daily refresh.
     private const int AGGREGATE_TTL_SECONDS = 86_400;
 
-    // Row lookups are freshness-sensitive (APK / ownership), so cached only briefly.
     private const int ROW_TTL_SECONDS = 600;
 
-    // Socrata caps a request at 1000 rows; limit-less breakdowns page at this size.
     private const int PROJECTION_PAGE_SIZE = 1000;
 
-    // Hard ceiling so a high-cardinality groupBy can't page an unbounded tail.
     private const int DEFAULT_MAX_PROJECTION_ROWS = 50_000;
+
+    /**
+     * RegisteredVehicleFuels numeric columns that Socrata stores as `text`. A `gt`/`lt`/`eq` against
+     * one of these compares lexicographically without a `to_number(...)` wrap (so `"9" > "150"`). Other
+     * numeric columns on the same dataset (the WLTP family, range/electricity fields) are kept on the
+     * normal `where()` path because we haven't verified their underlying Socrata `dataTypeName`; add
+     * an entry here once verified.
+     */
+    private const array TEXT_STORED_NUMERIC_FUEL_FIELDS = [
+        'NetMaximumPower',
+        'NominalContinuousMaximumPower',
+        'Co2EmissionsCombined',
+        'Co2EmissionsWeighted',
+        'FuelConsumptionOuter',
+        'FuelConsumptionCombined',
+        'FuelConsumptionCity',
+        'FuelConsumptionWeightedCombined',
+        'NoiseLevelDriving',
+        'NoiseLevelStationary',
+        'ParticulateEmissionsLight',
+        'ParticulateEmissionsHeavy',
+        'SootEmissions',
+        'NoiseLevelRpm',
+    ];
 
     public function __construct(
         private Rdw $rdw,
@@ -44,30 +66,28 @@ final readonly class PlanRunner
 
     public function run(Plan $plan): RunnerResult
     {
-        // A refusal plan has no SoQL to send; skip the dataset call so it never bills against the RDW rate limit.
         if ($plan->display === DisplayHint::Unsupported) {
             return new RunnerResult(rows: [], soql: [], url: '');
         }
 
-        $buckets = $this->buildBucketsByField($plan->groupBy);
+        $buckets = $this->buildBucketsByField($plan->groupBy, $plan->dataset);
 
-        $builder = $this->rdw->registeredVehicles();
-        $builder = $this->applyWhere($builder, $plan->where);
+        $builder = $this->builderFor($plan->dataset);
+        $builder = $this->applyWhere($builder, $plan->where, $plan->dataset);
         $builder = $this->applySelectAndGroupBy($builder, $plan, $buckets);
-        $builder = $this->applyAggregates($builder, $plan->aggregates);
-        $builder = $this->applyOrderBy($builder, $plan->orderBy, $plan->aggregates, $buckets);
+        $builder = $this->applyAggregates($builder, $plan->aggregates, $plan->dataset);
+        $builder = $this->applyOrderBy($builder, $plan->orderBy, $plan->aggregates, $buckets, $plan->dataset);
 
         if ($plan->limit !== null) {
             $builder = $builder->limit($plan->limit);
         }
 
         $soql = $builder->toSoqlParams();
-        $url = $this->buildRequestUrl($soql);
+        $url = $this->buildRequestUrl($soql, $plan->dataset);
 
-        // Prompts compiling to the same SoQL share one upstream call; only a successful fetch is cached.
         /** @var list<array<string, mixed>> $rows */
         $rows = $this->cache->remember(
-            $this->cacheKey($soql),
+            $this->cacheKey($soql, $plan->dataset),
             $this->cacheTtlSeconds($plan),
             fn (): array => $this->fetch($builder, $plan, $buckets, $soql, $url),
         );
@@ -76,7 +96,18 @@ final readonly class PlanRunner
     }
 
     /**
-     * @param  QueryBuilder<RegisteredVehicle>  $builder
+     * @return QueryBuilder<RegisteredVehicle|RegisteredVehicleFuel>
+     */
+    private function builderFor(TargetDataset $dataset): QueryBuilder
+    {
+        return match ($dataset) {
+            TargetDataset::RegisteredVehicles => $this->rdw->registeredVehicles(),
+            TargetDataset::RegisteredVehicleFuels => $this->rdw->registeredVehicleFuels(),
+        };
+    }
+
+    /**
+     * @param  QueryBuilder<RegisteredVehicle|RegisteredVehicleFuel>  $builder
      * @param  array<string, BucketExpression>  $buckets
      * @param  array<string, string>  $soql
      * @return list<array<string, mixed>>
@@ -88,7 +119,6 @@ final readonly class PlanRunner
             try {
                 return $this->execute($builder, $plan, $buckets);
             } catch (RateLimitException $e) {
-                // The controller maps this to a 429; pass through without wrapping or retrying.
                 throw $e;
             } catch (Throwable $e) {
                 if ($attempt < $this->maxAttempts && QueryExecutionException::isTransientFailure($e)) {
@@ -113,13 +143,13 @@ final readonly class PlanRunner
     /**
      * @param  array<string, string>  $soql
      */
-    private function cacheKey(array $soql): string
+    private function cacheKey(array $soql, TargetDataset $dataset): string
     {
         ksort($soql);
 
         return sprintf(
             'rdw:%s:%s:%s',
-            DatasetId::RegisteredVehicles->value,
+            $dataset->datasetId()->value,
             CarbonImmutable::now('Europe/Amsterdam')->toDateString(),
             sha1(json_encode($soql, JSON_THROW_ON_ERROR)),
         );
@@ -135,34 +165,35 @@ final readonly class PlanRunner
     /**
      * @param  array<string, string>  $soql
      */
-    private function buildRequestUrl(array $soql): string
+    private function buildRequestUrl(array $soql, TargetDataset $dataset): string
     {
         $base = rtrim($this->rdw->configuration()->baseUrl, '/');
-        $datasetId = DatasetId::RegisteredVehicles->value;
+        $datasetId = $dataset->datasetId()->value;
         $query = http_build_query($soql, '', '&', PHP_QUERY_RFC3986);
 
         return "{$base}/resource/{$datasetId}.json".($query !== '' ? "?{$query}" : '');
     }
 
     /**
-     * @param  QueryBuilder<RegisteredVehicle>  $builder
+     * @param  QueryBuilder<RegisteredVehicle|RegisteredVehicleFuel>  $builder
      * @param  list<WhereClause>  $clauses
-     * @return QueryBuilder<RegisteredVehicle>
+     * @return QueryBuilder<RegisteredVehicle|RegisteredVehicleFuel>
      */
-    private function applyWhere(QueryBuilder $builder, array $clauses): QueryBuilder
+    private function applyWhere(QueryBuilder $builder, array $clauses, TargetDataset $dataset): QueryBuilder
     {
         foreach ($clauses as $clause) {
-            $field = $this->resolveField($clause->field);
+            $field = $this->resolveField($clause->field, $dataset);
 
             $builder = match ($clause->op) {
-                WhereOp::Equals => $builder->where($field, $this->castValue($field, $clause->value), '='),
-                WhereOp::NotEquals => $builder->where($field, $this->castValue($field, $clause->value), '!='),
-                WhereOp::GreaterThan => $builder->where($field, $this->castValue($field, $clause->value), '>'),
-                WhereOp::GreaterThanOrEqual => $builder->where($field, $this->castValue($field, $clause->value), '>='),
-                WhereOp::LessThan => $builder->where($field, $this->castValue($field, $clause->value), '<'),
-                WhereOp::LessThanOrEqual => $builder->where($field, $this->castValue($field, $clause->value), '<='),
+                WhereOp::Equals => $this->applyComparison($builder, $field, $clause->value, '=', $dataset),
+                WhereOp::NotEquals => $this->applyComparison($builder, $field, $clause->value, '!=', $dataset),
+                WhereOp::GreaterThan => $this->applyComparison($builder, $field, $clause->value, '>', $dataset),
+                WhereOp::GreaterThanOrEqual => $this->applyComparison($builder, $field, $clause->value, '>=', $dataset),
+                WhereOp::LessThan => $this->applyComparison($builder, $field, $clause->value, '<', $dataset),
+                WhereOp::LessThanOrEqual => $this->applyComparison($builder, $field, $clause->value, '<=', $dataset),
                 WhereOp::Contains => $builder->whereRaw($this->normalisedContainsExpression($field, $clause->value)),
                 WhereOp::StartsWith => $builder->whereStartsWith($field, $clause->value),
+                WhereOp::In => $this->applyIn($builder, $field, $clause->values, $dataset),
             };
         }
 
@@ -170,9 +201,93 @@ final readonly class PlanRunner
     }
 
     /**
+     * @param  QueryBuilder<RegisteredVehicle|RegisteredVehicleFuel>  $builder
+     * @return QueryBuilder<RegisteredVehicle|RegisteredVehicleFuel>
+     */
+    private function applyComparison(QueryBuilder $builder, BackedEnum $field, string $rawValue, string $operator, TargetDataset $dataset): QueryBuilder
+    {
+        if ($this->needsToNumberWrap($field, $dataset)) {
+            // `!=` against a text-stored numeric excludes NULL rows: SoQL's `to_number('')` is NULL
+            // and `NULL != n` evaluates to NULL (treated as false). Acceptable — empty cells aren't
+            // meaningful for numeric comparisons anyway.
+            return $builder->whereRaw(sprintf(
+                'to_number(%s) %s %s',
+                $field->value,
+                $operator,
+                $this->assertNumericLiteral($field, $rawValue),
+            ));
+        }
+
+        return $builder->where($field, $this->castValue($field, $rawValue, $dataset), $operator);
+    }
+
+    /**
+     * @param  QueryBuilder<RegisteredVehicle|RegisteredVehicleFuel>  $builder
+     * @param  list<string>  $values
+     * @return QueryBuilder<RegisteredVehicle|RegisteredVehicleFuel>
+     */
+    private function applyIn(QueryBuilder $builder, BackedEnum $field, array $values, TargetDataset $dataset): QueryBuilder
+    {
+        if ($values === []) {
+            throw new InvalidArgumentException(sprintf(
+                'WhereOp::In on field "%s" requires a non-empty values list.',
+                $field->name,
+            ));
+        }
+
+        if ($this->needsToNumberWrap($field, $dataset)) {
+            $literals = array_map(
+                fn (string $v): string => $this->assertNumericLiteral($field, $v),
+                $values,
+            );
+
+            return $builder->whereRaw(sprintf(
+                'to_number(%s) IN (%s)',
+                $field->value,
+                implode(', ', $literals),
+            ));
+        }
+
+        return $builder->whereIn($field, $this->castValues($field, $values, $dataset));
+    }
+
+    /**
+     * Whether numeric comparisons against this field must be wrapped in `to_number(...)`. Only true
+     * for the allowlisted text-stored columns on RegisteredVehicleFuels — wrapping a column that is
+     * already stored as `number` is wasteful and the wrap is the only reason the raw-SoQL path
+     * exists, so we keep it narrow.
+     */
+    private function needsToNumberWrap(BackedEnum $field, TargetDataset $dataset): bool
+    {
+        if ($dataset !== TargetDataset::RegisteredVehicleFuels) {
+            return false;
+        }
+
+        return in_array($field->name, self::TEXT_STORED_NUMERIC_FUEL_FIELDS, true);
+    }
+
+    /**
+     * Guards the `whereRaw` interpolation: the value is concatenated into SoQL verbatim, so a
+     * non-numeric string here would be a SoQL-injection vector. Returns the canonical numeric
+     * representation (so `" 150 "` becomes `"150"`).
+     */
+    private function assertNumericLiteral(BackedEnum $field, string $raw): string
+    {
+        if (! is_numeric($raw)) {
+            throw new InvalidArgumentException(sprintf(
+                'Numeric comparison on field "%s" requires a numeric value, got "%s".',
+                $field->name,
+                $raw,
+            ));
+        }
+
+        return (string) (float) $raw;
+    }
+
+    /**
      * Separator-insensitive substring predicate, since RDW free-text fields spell values with inconsistent spaces/hyphens.
      */
-    private function normalisedContainsExpression(RegisteredVehicleField $field, string $value): string
+    private function normalisedContainsExpression(BackedEnum $field, string $value): string
     {
         $term = strtoupper(str_replace([' ', '-'], '', $value));
         $quoted = "'".str_replace("'", "''", $term)."'";
@@ -185,14 +300,14 @@ final readonly class PlanRunner
     }
 
     /**
-     * @param  QueryBuilder<RegisteredVehicle>  $builder
+     * @param  QueryBuilder<RegisteredVehicle|RegisteredVehicleFuel>  $builder
      * @param  array<string, BucketExpression>  $buckets
-     * @return QueryBuilder<RegisteredVehicle>
+     * @return QueryBuilder<RegisteredVehicle|RegisteredVehicleFuel>
      */
     private function applySelectAndGroupBy(QueryBuilder $builder, Plan $plan, array $buckets): QueryBuilder
     {
         foreach ($plan->select as $name) {
-            $builder = $builder->select($this->resolveField($name));
+            $builder = $builder->select($this->resolveField($name, $plan->dataset));
         }
 
         foreach ($plan->groupBy as $key) {
@@ -205,7 +320,7 @@ final readonly class PlanRunner
                 continue;
             }
 
-            $field = $this->resolveField($key->field);
+            $field = $this->resolveField($key->field, $plan->dataset);
             $builder = $builder->select($field)->groupBy($field);
         }
 
@@ -213,17 +328,18 @@ final readonly class PlanRunner
     }
 
     /**
-     * @param  QueryBuilder<RegisteredVehicle>  $builder
+     * @param  QueryBuilder<RegisteredVehicle|RegisteredVehicleFuel>  $builder
      * @param  list<AggregateClause>  $aggregates
-     * @return QueryBuilder<RegisteredVehicle>
+     * @return QueryBuilder<RegisteredVehicle|RegisteredVehicleFuel>
      */
-    private function applyAggregates(QueryBuilder $builder, array $aggregates): QueryBuilder
+    private function applyAggregates(QueryBuilder $builder, array $aggregates, TargetDataset $dataset): QueryBuilder
     {
         foreach ($aggregates as $agg) {
-            $field = $agg->field !== null ? $this->resolveField($agg->field) : null;
+            $field = $agg->field !== null ? $this->resolveField($agg->field, $dataset) : null;
 
             $builder = match ($agg->fn) {
                 AggregateFn::Count => $builder->count($field, $agg->alias),
+                AggregateFn::CountDistinct => $builder->countDistinct($this->requireField($field, AggregateFn::CountDistinct), $agg->alias),
                 AggregateFn::Sum => $builder->sum($this->requireField($field, AggregateFn::Sum), $agg->alias),
                 AggregateFn::Avg => $builder->avg($this->requireField($field, AggregateFn::Avg), $agg->alias),
                 AggregateFn::Min => $builder->min($this->requireField($field, AggregateFn::Min), $agg->alias),
@@ -235,20 +351,19 @@ final readonly class PlanRunner
     }
 
     /**
-     * @param  QueryBuilder<RegisteredVehicle>  $builder
+     * @param  QueryBuilder<RegisteredVehicle|RegisteredVehicleFuel>  $builder
      * @param  list<OrderClause>  $orderBy
      * @param  list<AggregateClause>  $aggregates
      * @param  array<string, BucketExpression>  $buckets
-     * @return QueryBuilder<RegisteredVehicle>
+     * @return QueryBuilder<RegisteredVehicle|RegisteredVehicleFuel>
      */
-    private function applyOrderBy(QueryBuilder $builder, array $orderBy, array $aggregates, array $buckets): QueryBuilder
+    private function applyOrderBy(QueryBuilder $builder, array $orderBy, array $aggregates, array $buckets, TargetDataset $dataset): QueryBuilder
     {
         $aliasSet = [];
         foreach ($aggregates as $agg) {
             $aliasSet[$agg->alias] = true;
         }
 
-        // Socrata sorts NULLs first on DESC, so force the sort column non-null; dedupe per field.
         $notNullApplied = [];
 
         foreach ($orderBy as $clause) {
@@ -260,7 +375,7 @@ final readonly class PlanRunner
                 continue;
             }
 
-            $field = $this->tryResolveField($clause->expr);
+            $field = $this->tryResolveField($clause->expr, $dataset);
             if ($field !== null) {
                 if (! isset($notNullApplied[$clause->expr])) {
                     $builder = $builder->whereNotNull($field);
@@ -285,25 +400,23 @@ final readonly class PlanRunner
     }
 
     /**
-     * @param  QueryBuilder<RegisteredVehicle>  $builder
+     * @param  QueryBuilder<RegisteredVehicle|RegisteredVehicleFuel>  $builder
      * @param  array<string, BucketExpression>  $buckets
      * @return list<array<string, mixed>>
      */
     private function execute(QueryBuilder $builder, Plan $plan, array $buckets): array
     {
         if ($plan->aggregates !== [] || $plan->groupBy !== []) {
-            return $this->normaliseProjectionRows($this->fetchProjectionRows($builder, $plan), $plan->aggregates, $buckets);
+            return $this->normaliseProjectionRows($this->fetchProjectionRows($builder, $plan), $plan->aggregates, $buckets, $plan->dataset);
         }
 
         $records = $builder->get();
 
-        return array_map(fn (object $r): array => $this->recordToArray($r, $plan->select), $records);
+        return array_map(fn (object $r): array => $this->recordToArray($r, $plan->select, $plan->dataset), $records);
     }
 
     /**
-     * Pages a limit-less projection until a short page (so a breakdown returns every bucket, not just Socrata's first 1000).
-     *
-     * @param  QueryBuilder<RegisteredVehicle>  $builder
+     * @param  QueryBuilder<RegisteredVehicle|RegisteredVehicleFuel>  $builder
      * @return list<array<string, mixed>>
      */
     private function fetchProjectionRows(QueryBuilder $builder, Plan $plan): array
@@ -327,10 +440,10 @@ final readonly class PlanRunner
      * @param  list<string>  $select
      * @return array<string, mixed>
      */
-    private function recordToArray(object $record, array $select): array
+    private function recordToArray(object $record, array $select, TargetDataset $dataset): array
     {
         $vars = get_object_vars($record);
-        $schema = $this->schema();
+        $schema = $this->schema($dataset);
 
         if ($select === []) {
             $out = [];
@@ -358,16 +471,14 @@ final readonly class PlanRunner
     }
 
     /**
-     * Rewrites Dutch snake_case rdwKey row keys to their PascalCase enum case; aliases pass through.
-     *
      * @param  list<array<string, mixed>>  $rows
      * @param  list<AggregateClause>  $aggregates
      * @param  array<string, BucketExpression>  $buckets
      * @return list<array<string, mixed>>
      */
-    private function normaliseProjectionRows(array $rows, array $aggregates, array $buckets): array
+    private function normaliseProjectionRows(array $rows, array $aggregates, array $buckets, TargetDataset $dataset): array
     {
-        $schema = $this->schema();
+        $schema = $this->schema($dataset);
         $passThrough = [];
         foreach ($aggregates as $agg) {
             $passThrough[$agg->alias] = true;
@@ -395,9 +506,9 @@ final readonly class PlanRunner
      * @param  list<GroupKey>  $groupBy
      * @return array<string, BucketExpression>
      */
-    private function buildBucketsByField(array $groupBy): array
+    private function buildBucketsByField(array $groupBy, TargetDataset $dataset): array
     {
-        $schema = $this->schema();
+        $schema = $this->schema($dataset);
         $out = [];
 
         foreach ($groupBy as $key) {
@@ -407,7 +518,7 @@ final readonly class PlanRunner
 
             $descriptor = $schema->byEnumCase[$key->field] ?? null;
             if ($descriptor === null) {
-                throw new InvalidArgumentException(sprintf('Unknown RegisteredVehicleField "%s".', $key->field));
+                throw new InvalidArgumentException(sprintf('Unknown field "%s" for dataset %s.', $key->field, $dataset->value));
             }
 
             $fn = match ($key->bucket) {
@@ -441,22 +552,22 @@ final readonly class PlanRunner
         return null;
     }
 
-    private function resolveField(string $name): RegisteredVehicleField
+    private function resolveField(string $name, TargetDataset $dataset): BackedEnum
     {
-        $field = $this->tryResolveField($name);
+        $field = $this->tryResolveField($name, $dataset);
         if ($field === null) {
-            throw new InvalidArgumentException(sprintf('Unknown RegisteredVehicleField "%s".', $name));
+            throw new InvalidArgumentException(sprintf('Unknown field "%s" for dataset %s.', $name, $dataset->value));
         }
 
         return $field;
     }
 
-    private function tryResolveField(string $name): ?RegisteredVehicleField
+    private function tryResolveField(string $name, TargetDataset $dataset): ?BackedEnum
     {
-        return RegisteredVehicleFieldLookup::tryGet($name);
+        return FieldLookup::tryGet($dataset, $name);
     }
 
-    private function requireField(?RegisteredVehicleField $field, AggregateFn $fn): RegisteredVehicleField
+    private function requireField(?BackedEnum $field, AggregateFn $fn): BackedEnum
     {
         if ($field === null) {
             throw new InvalidArgumentException(sprintf('Aggregate %s requires a field.', $fn->value));
@@ -465,19 +576,30 @@ final readonly class PlanRunner
         return $field;
     }
 
-    private function castValue(RegisteredVehicleField $field, string $raw): mixed
+    /**
+     * @param  list<string>  $raw
+     * @return list<mixed>
+     */
+    private function castValues(BackedEnum $field, array $raw, TargetDataset $dataset): array
     {
-        // Plates are stored uppercase without separators; normalise so the case-sensitive match works.
-        if ($field === RegisteredVehicleField::LicensePlate) {
+        return array_map(
+            fn (string $v): mixed => $this->castValue($field, $v, $dataset),
+            $raw,
+        );
+    }
+
+    private function castValue(BackedEnum $field, string $raw, TargetDataset $dataset): mixed
+    {
+        if ($field === RegisteredVehicleField::LicensePlate || $field === RegisteredVehicleFuelField::LicensePlate) {
             return PlateNormaliser::normalise($raw);
         }
 
-        $descriptor = $this->schema()->byEnumCase[$field->name] ?? null;
-        if ($descriptor === null) {
+        $cast = $this->fieldCast($field, $dataset);
+        if ($cast === null) {
             return $raw;
         }
 
-        return match ($descriptor->cast) {
+        return match ($cast) {
             CastType::Boolean => in_array(strtolower($raw), ['true', '1', 'ja', 'yes'], true),
             CastType::Integer => (int) $raw,
             CastType::Decimal => is_numeric($raw) ? (float) $raw : $raw,
@@ -486,8 +608,13 @@ final readonly class PlanRunner
         };
     }
 
-    private function schema(): DatasetSchema
+    private function fieldCast(BackedEnum $field, TargetDataset $dataset): ?CastType
     {
-        return $this->rdw->schemas()->get(DatasetId::RegisteredVehicles);
+        return $this->schema($dataset)->byEnumCase[$field->name]->cast ?? null;
+    }
+
+    private function schema(TargetDataset $dataset): DatasetSchema
+    {
+        return $this->rdw->schemas()->get($dataset->datasetId());
     }
 }

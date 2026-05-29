@@ -8,6 +8,7 @@ import { TableView } from './table-view';
 
 function plan(groupBy: Plan['groupBy'] = []): Plan {
     return {
+        dataset: 'RegisteredVehicles',
         where: [],
         select: [],
         groupBy,

@@ -14,6 +14,7 @@ use App\Services\QueryPlan\OrderClause;
 use App\Services\QueryPlan\OrderDirection;
 use App\Services\QueryPlan\Plan;
 use App\Services\QueryPlan\PlanRunner;
+use App\Services\QueryPlan\TargetDataset;
 use App\Services\QueryPlan\WhereClause;
 use App\Services\QueryPlan\WhereOp;
 use Carbon\CarbonImmutable;
@@ -113,6 +114,186 @@ final class PlanRunnerTest extends TestCase
         );
 
         self::assertSame('catalogusprijs > 50000', $runner->run($plan)->soql['$where']);
+    }
+
+    public function test_fuels_dataset_dispatches_to_the_fuels_endpoint(): void
+    {
+        $runner = $this->runnerReturning([]);
+
+        $plan = new Plan(
+            where: [],
+            select: [],
+            groupBy: [],
+            aggregates: [new AggregateClause(AggregateFn::Count, null, 'n')],
+            orderBy: [],
+            limit: null,
+            display: DisplayHint::Count,
+            explanation: '',
+            dataset: TargetDataset::RegisteredVehicleFuels,
+        );
+
+        $result = $runner->run($plan);
+
+        self::assertStringContainsString('/resource/8ys7-d773.json', $result->url);
+    }
+
+    public function test_decimal_compare_on_text_stored_fuel_column_wraps_in_to_number(): void
+    {
+        $runner = $this->runnerReturning([]);
+
+        $plan = new Plan(
+            where: [new WhereClause('NetMaximumPower', WhereOp::GreaterThan, '150')],
+            select: [],
+            groupBy: [],
+            aggregates: [new AggregateClause(AggregateFn::CountDistinct, 'LicensePlate', 'n')],
+            orderBy: [],
+            limit: null,
+            display: DisplayHint::Count,
+            explanation: '',
+            dataset: TargetDataset::RegisteredVehicleFuels,
+        );
+
+        $soql = $runner->run($plan)->soql;
+        self::assertSame('to_number(nettomaximumvermogen) > 150', $soql['$where']);
+        self::assertStringContainsString('count(distinct kenteken) AS n', $soql['$select']);
+    }
+
+    public function test_non_numeric_value_on_text_stored_fuel_comparison_is_rejected_before_reaching_soql(): void
+    {
+        // Defence against SoQL injection: the to_number(...) path interpolates the value verbatim,
+        // so a non-numeric string must never reach it.
+        $runner = $this->runnerReturning([]);
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('Numeric comparison on field "NetMaximumPower" requires a numeric value, got "150 OR 1=1"');
+
+        $runner->run(new Plan(
+            where: [new WhereClause('NetMaximumPower', WhereOp::GreaterThan, '150 OR 1=1')],
+            select: [],
+            groupBy: [],
+            aggregates: [new AggregateClause(AggregateFn::Count, null, 'n')],
+            orderBy: [],
+            limit: null,
+            display: DisplayHint::Count,
+            explanation: '',
+            dataset: TargetDataset::RegisteredVehicleFuels,
+        ));
+    }
+
+    public function test_in_op_on_text_stored_fuel_column_wraps_each_value_in_to_number(): void
+    {
+        $runner = $this->runnerReturning([]);
+
+        $plan = new Plan(
+            where: [new WhereClause('NetMaximumPower', WhereOp::In, '{{q1.NetMaximumPower}}', ['150', '200', '250'])],
+            select: [],
+            groupBy: [],
+            aggregates: [new AggregateClause(AggregateFn::Count, null, 'n')],
+            orderBy: [],
+            limit: null,
+            display: DisplayHint::Count,
+            explanation: '',
+            dataset: TargetDataset::RegisteredVehicleFuels,
+        );
+
+        self::assertSame(
+            'to_number(nettomaximumvermogen) IN (150, 200, 250)',
+            $runner->run($plan)->soql['$where'],
+        );
+    }
+
+    public function test_in_op_on_text_stored_fuel_column_rejects_a_non_numeric_value(): void
+    {
+        $runner = $this->runnerReturning([]);
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('Numeric comparison on field "NetMaximumPower"');
+
+        $runner->run(new Plan(
+            where: [new WhereClause('NetMaximumPower', WhereOp::In, '{{q1.NetMaximumPower}}', ['150', '200; DROP'])],
+            select: [],
+            groupBy: [],
+            aggregates: [new AggregateClause(AggregateFn::Count, null, 'n')],
+            orderBy: [],
+            limit: null,
+            display: DisplayHint::Count,
+            explanation: '',
+            dataset: TargetDataset::RegisteredVehicleFuels,
+        ));
+    }
+
+    public function test_decimal_compare_on_vehicles_dataset_does_not_wrap_in_to_number(): void
+    {
+        // Lock-in for the per-column allowlist: CatalogPrice lives on RegisteredVehicles (stored as
+        // a real number), so the to_number wrap must never be applied.
+        $runner = $this->runnerReturning([]);
+
+        $where = $runner->run(new Plan(
+            where: [new WhereClause('CatalogPrice', WhereOp::GreaterThan, '50000')],
+            select: [],
+            groupBy: [],
+            aggregates: [new AggregateClause(AggregateFn::Count, null, 'n')],
+            orderBy: [],
+            limit: null,
+            display: DisplayHint::Count,
+            explanation: '',
+        ))->soql['$where'];
+
+        self::assertSame('catalogusprijs > 50000', $where);
+        self::assertStringNotContainsString('to_number', $where);
+    }
+
+    public function test_in_op_emits_a_soql_in_clause_with_normalised_plates(): void
+    {
+        $runner = $this->runnerReturning([]);
+
+        $plan = new Plan(
+            where: [new WhereClause('LicensePlate', WhereOp::In, '{{q1.LicensePlate}}', ['AA-001-A', 'BB 002 B'])],
+            select: [],
+            groupBy: [],
+            aggregates: [new AggregateClause(AggregateFn::CountDistinct, 'LicensePlate', 'n')],
+            orderBy: [],
+            limit: null,
+            display: DisplayHint::Count,
+            explanation: '',
+            dataset: TargetDataset::RegisteredVehicleFuels,
+        );
+
+        $where = $runner->run($plan)->soql['$where'];
+        // Plates are uppercased and stripped of separators (the existing castValue rule).
+        self::assertStringContainsString("kenteken IN ('AA001A', 'BB002B')", $where);
+    }
+
+    public function test_cache_key_distinguishes_datasets_for_identical_soql(): void
+    {
+        $runner = $this->runnerForQueue([
+            new Psr7Response(200, ['Content-Type' => 'application/json'], '[]'),
+            new Psr7Response(200, ['Content-Type' => 'application/json'], '[]'),
+        ]);
+
+        $vehicles = new Plan(
+            where: [],
+            select: [],
+            groupBy: [],
+            aggregates: [new AggregateClause(AggregateFn::Count, null, 'n')],
+            orderBy: [],
+            limit: null,
+            display: DisplayHint::Count,
+            explanation: '',
+        );
+        $fuels = new Plan(
+            where: [],
+            select: [],
+            groupBy: [],
+            aggregates: [new AggregateClause(AggregateFn::Count, null, 'n')],
+            orderBy: [],
+            limit: null,
+            display: DisplayHint::Count,
+            explanation: '',
+            dataset: TargetDataset::RegisteredVehicleFuels,
+        );
+
+        self::assertNotSame($runner->run($vehicles)->url, $runner->run($fuels)->url);
     }
 
     public function test_orderby_accepts_field_names_and_aggregate_aliases_but_rejects_others(): void
