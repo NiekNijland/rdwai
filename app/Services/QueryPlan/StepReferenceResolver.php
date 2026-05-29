@@ -141,7 +141,7 @@ final class StepReferenceResolver
     }
 
     /**
-     * @param  array<string, mixed>  $row
+     * @param array<string, mixed> $row
      */
     private function columnValue(array $row, StepReference $reference): mixed
     {

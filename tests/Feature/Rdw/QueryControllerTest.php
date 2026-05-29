@@ -393,7 +393,7 @@ final class QueryControllerTest extends TestCase
     }
 
     /**
-     * @param  array<string, mixed>  $plan
+     * @param array<string, mixed> $plan
      */
     private function fakeQueryPlan(array $plan, ?Usage $usage = null, string $model = 'fake'): void
     {
@@ -409,7 +409,7 @@ final class QueryControllerTest extends TestCase
     }
 
     /**
-     * @param  array<string, mixed>  $program
+     * @param array<string, mixed> $program
      */
     private function fakeProgram(array $program, ?Usage $usage = null, string $model = 'fake'): void
     {
@@ -417,14 +417,14 @@ final class QueryControllerTest extends TestCase
             new StructuredTextResponse(
                 $program,
                 json_encode($program, JSON_THROW_ON_ERROR),
-                $usage ?? new Usage,
+                $usage ?? new Usage(),
                 new Meta('openai', $model),
             ),
         ]);
     }
 
     /**
-     * @param  list<array<string, mixed>>  $rows
+     * @param list<array<string, mixed>> $rows
      */
     private function fakeRdwWithRows(array $rows): void
     {
@@ -444,7 +444,7 @@ final class QueryControllerTest extends TestCase
     }
 
     /**
-     * @param  list<Psr7Response|Throwable>  $queue
+     * @param list<Psr7Response|Throwable> $queue
      */
     private function fakeRdwWithQueue(array $queue): void
     {
@@ -455,7 +455,7 @@ final class QueryControllerTest extends TestCase
             'handler' => $stack,
         ]);
 
-        $rdw = new Rdw(http: new SocrataClient(new RdwConfiguration, $guzzle));
+        $rdw = new Rdw(http: new SocrataClient(new RdwConfiguration(), $guzzle));
         $this->app->instance(Rdw::class, $rdw);
         $this->app->instance(PlanRunner::class, new PlanRunner($rdw, maxAttempts: 2, retryBackoffMs: 0));
     }

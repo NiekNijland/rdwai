@@ -521,7 +521,7 @@ final class PlanFactoryTest extends TestCase
 
     private function factory(): PlanFactory
     {
-        return new PlanFactory(new SchemaRegistry);
+        return new PlanFactory(new SchemaRegistry());
     }
 
     private function planWithLimit(PlanFactory $factory, ?int $limit): Plan

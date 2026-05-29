@@ -57,11 +57,12 @@ final readonly class PlanRunner
 
     public function __construct(
         private Rdw $rdw,
-        private Repository $cache = new Repository(new NullStore),
+        private Repository $cache = new Repository(new NullStore()),
         private int $maxAttempts = 2,
         private int $retryBackoffMs = 250,
         private int $maxProjectionRows = self::DEFAULT_MAX_PROJECTION_ROWS,
-    ) {}
+    ) {
+    }
 
     public function run(Plan $plan): RunnerResult
     {
@@ -106,9 +107,9 @@ final readonly class PlanRunner
     }
 
     /**
-     * @param  QueryBuilder<RegisteredVehicle|RegisteredVehicleFuel>  $builder
-     * @param  array<string, BucketExpression>  $buckets
-     * @param  array<string, string>  $soql
+     * @param QueryBuilder<RegisteredVehicle|RegisteredVehicleFuel> $builder
+     * @param array<string, BucketExpression> $buckets
+     * @param array<string, string> $soql
      * @return list<array<string, mixed>>
      */
     private function fetch(QueryBuilder $builder, Plan $plan, array $buckets, array $soql, string $url): array
@@ -140,7 +141,7 @@ final readonly class PlanRunner
     }
 
     /**
-     * @param  array<string, string>  $soql
+     * @param array<string, string> $soql
      */
     private function cacheKey(array $soql, TargetDataset $dataset): string
     {
@@ -162,7 +163,7 @@ final readonly class PlanRunner
     }
 
     /**
-     * @param  array<string, string>  $soql
+     * @param array<string, string> $soql
      */
     private function buildRequestUrl(array $soql, TargetDataset $dataset): string
     {
@@ -170,12 +171,12 @@ final readonly class PlanRunner
         $datasetId = $dataset->datasetId()->value;
         $query = http_build_query($soql, '', '&', PHP_QUERY_RFC3986);
 
-        return "{$base}/resource/{$datasetId}.json".($query !== '' ? "?{$query}" : '');
+        return "{$base}/resource/{$datasetId}.json" . ($query !== '' ? "?{$query}" : '');
     }
 
     /**
-     * @param  QueryBuilder<RegisteredVehicle|RegisteredVehicleFuel>  $builder
-     * @param  list<WhereClause>  $clauses
+     * @param QueryBuilder<RegisteredVehicle|RegisteredVehicleFuel> $builder
+     * @param list<WhereClause> $clauses
      * @return QueryBuilder<RegisteredVehicle|RegisteredVehicleFuel>
      */
     private function applyWhere(QueryBuilder $builder, array $clauses, TargetDataset $dataset): QueryBuilder
@@ -204,7 +205,7 @@ final readonly class PlanRunner
      * `where()` path. NB: `!=` on a text-stored numeric drops NULL/empty cells (SoQL evaluates
      * `to_number('') != n` to NULL); acceptable since empty cells aren't meaningfully numeric.
      *
-     * @param  QueryBuilder<RegisteredVehicle|RegisteredVehicleFuel>  $builder
+     * @param QueryBuilder<RegisteredVehicle|RegisteredVehicleFuel> $builder
      * @return QueryBuilder<RegisteredVehicle|RegisteredVehicleFuel>
      */
     private function applyComparison(QueryBuilder $builder, BackedEnum $field, string $rawValue, string $operator, TargetDataset $dataset): QueryBuilder
@@ -222,8 +223,8 @@ final readonly class PlanRunner
     }
 
     /**
-     * @param  QueryBuilder<RegisteredVehicle|RegisteredVehicleFuel>  $builder
-     * @param  list<string>  $values
+     * @param QueryBuilder<RegisteredVehicle|RegisteredVehicleFuel> $builder
+     * @param list<string> $values
      * @return QueryBuilder<RegisteredVehicle|RegisteredVehicleFuel>
      */
     private function applyIn(QueryBuilder $builder, BackedEnum $field, array $values, TargetDataset $dataset): QueryBuilder
@@ -293,7 +294,7 @@ final readonly class PlanRunner
     private function normalisedContainsExpression(BackedEnum $field, string $value): string
     {
         $term = strtoupper(str_replace([' ', '-'], '', $value));
-        $quoted = "'".str_replace("'", "''", $term)."'";
+        $quoted = "'" . str_replace("'", "''", $term) . "'";
 
         return sprintf(
             "contains(replace(replace(%s, ' ', ''), '-', ''), %s)",
@@ -303,8 +304,8 @@ final readonly class PlanRunner
     }
 
     /**
-     * @param  QueryBuilder<RegisteredVehicle|RegisteredVehicleFuel>  $builder
-     * @param  array<string, BucketExpression>  $buckets
+     * @param QueryBuilder<RegisteredVehicle|RegisteredVehicleFuel> $builder
+     * @param array<string, BucketExpression> $buckets
      * @return QueryBuilder<RegisteredVehicle|RegisteredVehicleFuel>
      */
     private function applySelectAndGroupBy(QueryBuilder $builder, Plan $plan, array $buckets): QueryBuilder
@@ -331,8 +332,8 @@ final readonly class PlanRunner
     }
 
     /**
-     * @param  QueryBuilder<RegisteredVehicle|RegisteredVehicleFuel>  $builder
-     * @param  list<AggregateClause>  $aggregates
+     * @param QueryBuilder<RegisteredVehicle|RegisteredVehicleFuel> $builder
+     * @param list<AggregateClause> $aggregates
      * @return QueryBuilder<RegisteredVehicle|RegisteredVehicleFuel>
      */
     private function applyAggregates(QueryBuilder $builder, array $aggregates, TargetDataset $dataset): QueryBuilder
@@ -354,10 +355,10 @@ final readonly class PlanRunner
     }
 
     /**
-     * @param  QueryBuilder<RegisteredVehicle|RegisteredVehicleFuel>  $builder
-     * @param  list<OrderClause>  $orderBy
-     * @param  list<AggregateClause>  $aggregates
-     * @param  array<string, BucketExpression>  $buckets
+     * @param QueryBuilder<RegisteredVehicle|RegisteredVehicleFuel> $builder
+     * @param list<OrderClause> $orderBy
+     * @param list<AggregateClause> $aggregates
+     * @param array<string, BucketExpression> $buckets
      * @return QueryBuilder<RegisteredVehicle|RegisteredVehicleFuel>
      */
     private function applyOrderBy(QueryBuilder $builder, array $orderBy, array $aggregates, array $buckets, TargetDataset $dataset): QueryBuilder
@@ -373,7 +374,7 @@ final readonly class PlanRunner
             $direction = $clause->direction === OrderDirection::Desc ? SortDirection::Desc : SortDirection::Asc;
 
             if (isset($buckets[$clause->expr])) {
-                $builder = $builder->orderByRaw($buckets[$clause->expr]->expression.' '.$direction->value);
+                $builder = $builder->orderByRaw($buckets[$clause->expr]->expression . ' ' . $direction->value);
 
                 continue;
             }
@@ -396,15 +397,15 @@ final readonly class PlanRunner
                 ));
             }
 
-            $builder = $builder->orderByRaw($clause->expr.' '.$direction->value);
+            $builder = $builder->orderByRaw($clause->expr . ' ' . $direction->value);
         }
 
         return $builder;
     }
 
     /**
-     * @param  QueryBuilder<RegisteredVehicle|RegisteredVehicleFuel>  $builder
-     * @param  array<string, BucketExpression>  $buckets
+     * @param QueryBuilder<RegisteredVehicle|RegisteredVehicleFuel> $builder
+     * @param array<string, BucketExpression> $buckets
      * @return list<array<string, mixed>>
      */
     private function execute(QueryBuilder $builder, Plan $plan, array $buckets): array
@@ -419,7 +420,7 @@ final readonly class PlanRunner
     }
 
     /**
-     * @param  QueryBuilder<RegisteredVehicle|RegisteredVehicleFuel>  $builder
+     * @param QueryBuilder<RegisteredVehicle|RegisteredVehicleFuel> $builder
      * @return list<array<string, mixed>>
      */
     private function fetchProjectionRows(QueryBuilder $builder, Plan $plan): array
@@ -440,7 +441,7 @@ final readonly class PlanRunner
     }
 
     /**
-     * @param  list<string>  $select
+     * @param list<string> $select
      * @return array<string, mixed>
      */
     private function recordToArray(object $record, array $select, TargetDataset $dataset): array
@@ -474,9 +475,9 @@ final readonly class PlanRunner
     }
 
     /**
-     * @param  list<array<string, mixed>>  $rows
-     * @param  list<AggregateClause>  $aggregates
-     * @param  array<string, BucketExpression>  $buckets
+     * @param list<array<string, mixed>> $rows
+     * @param list<AggregateClause> $aggregates
+     * @param array<string, BucketExpression> $buckets
      * @return list<array<string, mixed>>
      */
     private function normaliseProjectionRows(array $rows, array $aggregates, array $buckets, TargetDataset $dataset): array
@@ -506,7 +507,7 @@ final readonly class PlanRunner
     }
 
     /**
-     * @param  list<GroupKey>  $groupBy
+     * @param list<GroupKey> $groupBy
      * @return array<string, BucketExpression>
      */
     private function buildBucketsByField(array $groupBy, TargetDataset $dataset): array
@@ -580,7 +581,7 @@ final readonly class PlanRunner
     }
 
     /**
-     * @param  list<string>  $raw
+     * @param list<string> $raw
      * @return list<mixed>
      */
     private function castValues(BackedEnum $field, array $raw, TargetDataset $dataset): array

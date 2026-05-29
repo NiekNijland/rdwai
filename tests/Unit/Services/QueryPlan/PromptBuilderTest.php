@@ -183,6 +183,6 @@ final class PromptBuilderTest extends TestCase
 
     private function builder(): PromptBuilder
     {
-        return new PromptBuilder(new SchemaRegistry);
+        return new PromptBuilder(new SchemaRegistry());
     }
 }

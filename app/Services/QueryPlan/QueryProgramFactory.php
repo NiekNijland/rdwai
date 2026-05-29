@@ -15,10 +15,11 @@ final class QueryProgramFactory
     public function __construct(
         private readonly PlanFactory $planFactory,
         private readonly PresentationFactory $presentationFactory,
-    ) {}
+    ) {
+    }
 
     /**
-     * @param  array<string, mixed>  $data
+     * @param array<string, mixed> $data
      */
     public function fromArray(array $data): QueryProgram
     {
@@ -66,7 +67,7 @@ final class QueryProgramFactory
     }
 
     /**
-     * @param  list<string>  $seenIds
+     * @param list<string> $seenIds
      */
     private function parseId(mixed $raw, array $seenIds): string
     {
@@ -97,8 +98,8 @@ final class QueryProgramFactory
     }
 
     /**
-     * @param  list<string>  $earlierIds
-     * @param  array<string, TargetDataset>  $datasetById
+     * @param list<string> $earlierIds
+     * @param array<string, TargetDataset> $datasetById
      */
     private function assertReferencesPointBackward(Plan $plan, array $earlierIds, string $selfId, array $datasetById): void
     {
@@ -131,7 +132,7 @@ final class QueryProgramFactory
     }
 
     /**
-     * @param  array<string, mixed>  $data
+     * @param array<string, mixed> $data
      * @return list<mixed>
      */
     private function arrayOrEmpty(array $data, string $key): array

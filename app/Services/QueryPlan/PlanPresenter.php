@@ -11,7 +11,7 @@ final class PlanPresenter
     /**
      * Read-path shim so pre-Bucket QueryRun documents come out in the current {field, bucket} groupBy shape.
      *
-     * @param  array<string, mixed>  $plan
+     * @param array<string, mixed> $plan
      * @return array<string, mixed>
      */
     public static function normalisePersisted(array $plan): array
@@ -36,7 +36,7 @@ final class PlanPresenter
      * Applies `normalisePersisted` to each step's nested `plan` so pre-change QueryRun documents
      * deserialise into the shape the frontend's `Plan` type now declares.
      *
-     * @param  list<array<string, mixed>>|null  $steps
+     * @param list<array<string, mixed>>|null $steps
      * @return list<array<string, mixed>>
      */
     public static function normalisePersistedSteps(?array $steps): array
@@ -55,7 +55,7 @@ final class PlanPresenter
     }
 
     /**
-     * @param  list<LedgerEntry>  $steps
+     * @param list<LedgerEntry> $steps
      * @return list<array<string, mixed>>
      */
     public static function stepsToArray(array $steps): array

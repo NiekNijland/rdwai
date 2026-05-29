@@ -216,7 +216,7 @@ final class QueryProgramFactoryTest extends TestCase
 
     private function factory(): QueryProgramFactory
     {
-        return new QueryProgramFactory(new PlanFactory(new SchemaRegistry), new PresentationFactory);
+        return new QueryProgramFactory(new PlanFactory(new SchemaRegistry()), new PresentationFactory());
     }
 
     /**

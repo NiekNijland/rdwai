@@ -33,7 +33,8 @@ class RunNaturalLanguageQuery
         private readonly QueryProgramFactory $programFactory,
         private readonly StepReferenceResolver $referenceResolver,
         private readonly Derivation $derivation,
-    ) {}
+    ) {
+    }
 
     public function execute(string $userPrompt, Locale $locale): QueryResult
     {
@@ -47,7 +48,7 @@ class RunNaturalLanguageQuery
         $tokens = TokenUsage::fromUsage($response->usage);
         $estimatedCost = $this->costEstimator->estimate($model, $response->usage);
 
-        $ledger = new QueryLedger;
+        $ledger = new QueryLedger();
 
         try {
             foreach ($program->queries as $query) {

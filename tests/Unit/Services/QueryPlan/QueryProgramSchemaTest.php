@@ -13,14 +13,14 @@ final class QueryProgramSchemaTest extends TestCase
 {
     public function test_builds_a_program_schema_with_queries_and_presentation(): void
     {
-        $built = QueryProgramSchema::build(new JsonSchemaTypeFactory);
+        $built = QueryProgramSchema::build(new JsonSchemaTypeFactory());
 
         self::assertSame(['queries', 'presentation'], array_keys($built));
     }
 
     public function test_serialises_to_a_json_schema_without_error(): void
     {
-        $built = QueryProgramSchema::build(new JsonSchemaTypeFactory);
+        $built = QueryProgramSchema::build(new JsonSchemaTypeFactory());
 
         $schema = (new ObjectSchema($built))->toSchema();
 
@@ -34,7 +34,7 @@ final class QueryProgramSchemaTest extends TestCase
 
     public function test_query_limit_is_nullable_so_breakdowns_can_opt_out_of_a_row_cap(): void
     {
-        $built = QueryProgramSchema::build(new JsonSchemaTypeFactory);
+        $built = QueryProgramSchema::build(new JsonSchemaTypeFactory());
 
         $schema = (new ObjectSchema($built))->toSchema();
         $limit = $schema['properties']['queries']['items']['properties']['limit'];
@@ -46,7 +46,7 @@ final class QueryProgramSchemaTest extends TestCase
 
     public function test_query_dataset_is_a_required_enum_listing_both_targets(): void
     {
-        $built = QueryProgramSchema::build(new JsonSchemaTypeFactory);
+        $built = QueryProgramSchema::build(new JsonSchemaTypeFactory());
 
         $schema = (new ObjectSchema($built))->toSchema();
         $dataset = $schema['properties']['queries']['items']['properties']['dataset'];
